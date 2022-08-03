@@ -28,16 +28,16 @@
 #endif
 
 /** Format for backup file name */
-#define CONF_BACKUP_NAME         "%s/te_cfg_backup_%d_%llu.xml"
+#define CONF_BACKUP_NAME         "%s/te_cfg_backup_%d_%llu.yml"
 
 /** Format for backup file name for subtree*/
-#define CONF_SUBTREE_BACKUP_NAME "%s/te_cfg_subree_backup_%d_%llu.xml"
+#define CONF_SUBTREE_BACKUP_NAME "%s/te_cfg_subree_backup_%d_%llu.yml"
 
 /** Name of the XSL filter file for generation subtree backup */
 #define CONF_SUBTREE_BACKUP_FILTER_NAME "subtree_backup.xsl"
 
 /** Name of the file to store a list of the subtrees */
-#define CONF_FILTERS_FILE_NAME  "%s/te_cfg_filter_%d_%llu.xml"
+#define CONF_FILTERS_FILE_NAME  "%s/te_cfg_filter_%d_%llu.yml"
 
 static char  buf[CFG_BUF_LEN];
 static char  tmp_buf[1024];
@@ -420,53 +420,21 @@ static int
 parse_config_xml(const char *file, te_kvpair_h *expand_vars, te_bool history,
                  const te_vec *subtrees)
 {
-    xmlDocPtr   doc;
     xmlNodePtr  root;
     int         rc;
-    int         subst;
 
     if (file == NULL)
         return 0;
 
     RING("Parsing %s", file);
 
-    if ((doc = xmlParseFile(file)) == NULL)
+    root = xmlNewNode(NULL, BAD_CAST "backup");
+
+    rc = yaml_parse_backup_to_xml(file, root);
+    if (rc != 0)
     {
-#if HAVE_XMLERROR
-        xmlError *err = xmlGetLastError();
-
-        ERROR("Error occured during parsing configuration file:\n"
-              "    %s:%d\n    %s", file, err->line, err->message);
-#else
-        ERROR("Error occured during parsing configuration file:\n"
-              "    %s", file);
-#endif
-        xmlCleanupParser();
-        return TE_RC(TE_CS, TE_EINVAL);
-    }
-
-    VERB("Do XInclude substitutions in the document");
-    subst = xmlXIncludeProcess(doc);
-    if (subst < 0)
-    {
-#if HAVE_XMLERROR
-        xmlError *err = xmlGetLastError();
-
-        ERROR("XInclude processing failed: %s", err->message);
-#else
-        ERROR("XInclude processing failed");
-#endif
-        xmlCleanupParser();
-        return TE_RC(TE_CS, TE_EINVAL);
-    }
-    VERB("XInclude made %d substitutions", subst);
-
-    if ((root = xmlDocGetRootElement(doc)) == NULL)
-    {
-        VERB("Empty configuration file is provided");
-        xmlFreeDoc(doc);
-        xmlCleanupParser();
-        return 0;
+        ERROR("Couldn't parse yaml to xml");
+        return rc;
     }
 
     rcf_log_cfg_changes(TRUE);
@@ -502,8 +470,7 @@ parse_config_xml(const char *file, te_kvpair_h *expand_vars, te_bool history,
     }
     rcf_log_cfg_changes(FALSE);
 
-    xmlFreeDoc(doc);
-    xmlCleanupParser();
+    xmlFreeNode(root);
     return rc;
 }
 
@@ -2038,22 +2005,6 @@ subtrees_str2vec(const char *str, te_vec *vec, unsigned int subtrees_num)
     return rc;
 }
 
-static te_errno
-get_path_to_xslt_filter(te_string *path)
-{
-    char *dir_name = NULL;
-
-    dir_name = getenv("TE_INSTALL");
-    if (dir_name == NULL)
-    {
-        ERROR("Failed to get TE_INSTALL");
-        return TE_ENOENT;
-    }
-
-    return te_string_append(path, "%s/default/share/xsl/%s", dir_name,
-                            CONF_SUBTREE_BACKUP_FILTER_NAME);
-}
-
 /**
  * Filter the backup file by the specified subtree and
  * save the result
@@ -2081,29 +2032,13 @@ filter_backup_by_subtrees(const char *current_backup, const te_vec *subtrees,
     if (rc != 0)
         goto out;
 
-    rc = cfg_backup_create_filter_file(filter_filename.ptr, subtrees);
-    if (rc != 0)
-        goto out;
-
     rc = te_string_append(target_backup, CONF_SUBTREE_BACKUP_NAME,
                           tmp_dir, getpid(), get_time_ms());
     if (rc != 0)
         goto out;
 
-    rc = get_path_to_xslt_filter(&xslt_file);
-    if (rc != 0)
-        goto out;
-
-    rc = te_string_append(&filter_cmd,
-                          "xsltproc --stringparam filters %s %s %s > %s",
-                          filter_filename.ptr, xslt_file.ptr,
-                          current_backup, target_backup->ptr);
-    if (rc != 0)
-        goto out;
-
-    rc = system(filter_cmd.ptr);
-    if (rc != 0)
-        ERROR("Failed to extract subtrees from the backup file");
+    rc = yaml_parse_filter_subtrees(subtrees, current_backup,
+                                    target_backup->ptr);
 
 out:
     te_string_free(&filter_cmd);
@@ -3023,12 +2958,12 @@ main(int argc, char **argv)
     }
 
     if ((filename = (char *)malloc(strlen(tmp_dir) +
-                                   strlen("/te_cfg_tmp.xml") + 1)) == NULL)
+                                   strlen("/te_cfg_tmp.yml") + 1)) == NULL)
     {
         ERROR("No enough memory");
         goto exit;
     }
-    sprintf(filename, "%s/te_cfg_tmp.xml", tmp_dir);
+    sprintf(filename, "%s/te_cfg_tmp.yml", tmp_dir);
 
     if ((rc = cfg_db_init()) != 0)
     {

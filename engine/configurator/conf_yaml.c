@@ -1228,3 +1228,467 @@ out:
     return rc;
 }
 
+/**
+ * Convert YAML backup file to XML structure
+ *
+ * @param file         path name of the file
+ * @param root         XML structure, it should be freed
+ *
+ * @return int status code (see te_errno.h)
+ */
+te_errno
+yaml_parse_backup_to_xml(const char *filename, xmlNodePtr ptr_backup)
+{
+    FILE *f = NULL;
+    yaml_parser_t parser;
+    yaml_document_t dy;
+    yaml_node_t *root = NULL;
+    te_errno rc = 0;
+    xmlNodePtr xn_target = NULL;
+    yaml_node_item_t *item;
+    yaml_node_pair_t *pair;
+    yaml_node_t *k;
+
+    f = fopen(filename, "rb");
+    if (f == NULL)
+    {
+        ERROR(CS_YAML_ERR_PREFIX "failed to open the target file '%s'",
+              filename);
+        return TE_OS_RC(TE_CS, errno);
+    }
+    yaml_parser_initialize(&parser);
+    yaml_parser_set_input_file(&parser, f);
+    yaml_parser_load(&parser, &dy);
+    fclose(f);
+    root = yaml_document_get_root_node(&dy);
+
+    if (root == NULL)
+    {
+        ERROR(CS_YAML_ERR_PREFIX "failed to get the root node in file %s'",
+              filename);
+        rc = TE_EINVAL;
+        goto out;
+    }
+
+    if (root->type == YAML_SCALAR_NODE &&
+        root->data.scalar.value[0] == '\0')
+    {
+        INFO(CS_YAML_ERR_PREFIX "empty file '%s'", filename);
+        rc = TE_EINVAL;
+        goto out;
+    }
+    if (root->type != YAML_MAPPING_NODE)
+    {
+        ERROR(CS_YAML_ERR_PREFIX "error. There should be a mapping in YAML."
+              "However it is %d.", root->type);
+        rc = TE_EINVAL;
+        goto out;
+    }
+    pair = root->data.mapping.pairs.start;
+    k = yaml_document_get_node(&dy, pair->key);
+
+    if (k->type != YAML_SCALAR_NODE)
+    {
+        ERROR(CS_YAML_ERR_PREFIX "error. "
+              "There should be a scalar node in YAML");
+        rc = TE_EINVAL;
+        goto out;
+    }
+    root = yaml_document_get_node(&dy, pair->value);
+
+    if (root->type != YAML_SEQUENCE_NODE)
+    {
+        ERROR(CS_YAML_ERR_PREFIX "error. There should be a sequence in YAML."
+              "However it is %d.", root->type);
+        rc = TE_EINVAL;
+        goto out;
+    }
+
+    item = root->data.sequence.items.start;
+
+    do {
+        yaml_node_t *node_item = yaml_document_get_node(&dy, *item);
+        yaml_node_pair_t *pair;
+        yaml_node_t *k;
+        yaml_node_t *v;
+        cs_yaml_target_context_t c = YAML_TARGET_CONTEXT_INIT;
+        const char *target = NULL;
+
+        /* Here expected "object:" or "instance:" */
+        if (node_item->type != YAML_MAPPING_NODE)
+        {
+            ERROR(CS_YAML_ERR_PREFIX "error. "
+                  "There should be a mapping in YAML");
+            rc = TE_EINVAL;
+            goto out;
+        }
+        if (node_item->data.mapping.pairs.top -
+            node_item->data.mapping.pairs.start != 1)
+        {
+            ERROR(CS_YAML_ERR_PREFIX "error. There should be a only one "
+                  "key. %d+1=%d", node_item->data.mapping.pairs.start,
+                  node_item->data.mapping.pairs.top);
+            rc = TE_EINVAL;
+            goto out;
+        }
+
+        pair = node_item->data.mapping.pairs.start;
+        k = yaml_document_get_node(&dy, pair->key);
+
+        if (k->type != YAML_SCALAR_NODE)
+        {
+            ERROR(CS_YAML_ERR_PREFIX "error. "
+                  "There should be a scalar node in YAML");
+            rc = TE_EINVAL;
+            goto out;
+        }
+
+        target = (char *)k->data.scalar.value;
+
+        if (strcmp(target, "object") != 0 && strcmp(target, "instance") != 0)
+        {
+            ERROR(CS_YAML_ERR_PREFIX "error. "
+                  "There should be only \"object\" or \"instance\" in YAML. "
+                  "However it is \"%s\"", target);
+            rc = TE_EINVAL;
+            goto out;
+        }
+
+        xn_target = xmlNewNode(NULL, BAD_CAST target);
+        if (xn_target == NULL)
+        {
+            ERROR(CS_YAML_ERR_PREFIX "failed to allocate %s"
+                  "node for XML output", target);
+            rc = TE_ENOMEM;
+            goto out;
+        }
+
+        v = yaml_document_get_node(&dy, pair->value);
+
+        if (v->type != YAML_MAPPING_NODE)
+        {
+            ERROR(CS_YAML_ERR_PREFIX "error. "
+                  "There should be a mapping in YAML");
+            rc = TE_EINVAL;
+            xmlFreeNode(xn_target);
+            goto out;
+        }
+        pair = v->data.mapping.pairs.start;
+
+        do {
+            yaml_node_t *kk = yaml_document_get_node(&dy, pair->key);
+            yaml_node_t *vv = yaml_document_get_node(&dy, pair->value);
+
+            rc = parse_config_yaml_cmd_add_target_attribute(&dy, kk, vv,
+                                                            &c, NULL);
+            if (rc != 0)
+            {
+                ERROR(CS_YAML_ERR_PREFIX "failed to process %s"
+                      "attribute at " YAML_NODE_LINE_COLUMN_FMT "",
+                      target, YAML_NODE_LINE_COLUMN(k));
+                cytc_cleanup(&c);
+                xmlFreeNode(xn_target);
+                goto out;
+            }
+        } while (++pair < v->data.mapping.pairs.top);
+
+        rc = embed_yaml_target_in_xml(ptr_backup, xn_target, &c);
+        cytc_cleanup(&c);
+
+        if (rc != 0)
+        {
+            xmlFreeNode(xn_target);
+            goto out;
+        }
+
+    } while (++item < root->data.sequence.items.top);
+
+    if (rc != 0)
+    {
+        ERROR(CS_YAML_ERR_PREFIX
+              "encountered some error(s) on file '%s' processing",
+              filename);
+        xmlFreeNode(xn_target);
+        goto out;
+    }
+
+out:
+
+    yaml_document_delete(&dy);
+    yaml_parser_delete(&parser);
+
+    return rc;
+}
+
+/* See description in conf_yaml.h */
+te_errno
+yaml_parse_filter_subtrees(const te_vec *subtrees, const char *current_backup,
+                           const char *target_backup)
+{
+    FILE *f_in = NULL;
+    yaml_parser_t parser;
+    yaml_document_t dy;
+    yaml_node_t *root = NULL;
+    te_errno rc = 0;
+    char * const *subtree;
+    FILE *f_out =NULL;
+    yaml_node_item_t *item;
+
+    f_in = fopen(current_backup, "rb");
+    if (f_in == NULL)
+    {
+        ERROR(CS_YAML_ERR_PREFIX "failed to open the backup file '%s'",
+              current_backup);
+        return TE_OS_RC(TE_CS, errno);
+    }
+    yaml_parser_initialize(&parser);
+    yaml_parser_set_input_file(&parser, f_in);
+    yaml_parser_load(&parser, &dy);
+    fclose(f_in);
+    root = yaml_document_get_root_node(&dy);
+
+    f_out= fopen(target_backup, "w");
+
+    if (f_out == NULL)
+        return TE_OS_RC(TE_CS, errno);
+
+    fprintf(f_out, "---\n");
+    fprintf(f_out, "# The subtree backup file automatically generated "
+            "by Configurator.\n\n");
+
+
+    if (root == NULL)
+    {
+        ERROR(CS_YAML_ERR_PREFIX "failed to get the root node in file %s'",
+              current_backup);
+        rc = TE_EINVAL;
+        goto out;
+    }
+
+    if (root->type == YAML_SCALAR_NODE &&
+        root->data.scalar.value[0] == '\0')
+    {
+        INFO(CS_YAML_ERR_PREFIX "empty file '%s'", current_backup);
+        rc = 0;
+        goto out;
+    }
+    if (root->type != YAML_SEQUENCE_NODE)
+    {
+        ERROR(CS_YAML_ERR_PREFIX "error. There should be a sequence in YAML."
+              "However it is %d.", root->type);
+        return TE_EINVAL;
+    }
+
+    item = root->data.sequence.items.start;
+
+    do {
+        yaml_node_t *node_item = yaml_document_get_node(&dy, *item);
+        yaml_node_pair_t *pair;
+        yaml_node_t *k;
+        yaml_node_t *v;
+        const char *target = NULL;
+
+        /* Here expected "object:" or "instance:" */
+        if (node_item->type != YAML_MAPPING_NODE)
+        {
+            ERROR(CS_YAML_ERR_PREFIX "error. "
+                  "There should be a mapping in YAML");
+            rc = TE_EINVAL;
+            goto out;
+        }
+        if (node_item->data.mapping.pairs.top -
+            node_item->data.mapping.pairs.start != 1)
+        {
+            ERROR(CS_YAML_ERR_PREFIX "error. There should be a only one "
+                  "key. %d+1=%d", node_item->data.mapping.pairs.start,
+                  node_item->data.mapping.pairs.top);
+            rc = TE_EINVAL;
+            goto out;
+        }
+
+        pair = node_item->data.mapping.pairs.start;
+        k = yaml_document_get_node(&dy, pair->key);
+
+        if (k->type != YAML_SCALAR_NODE)
+        {
+            ERROR(CS_YAML_ERR_PREFIX "error. "
+                  "There should be a scalar node in YAML");
+            rc = TE_EINVAL;
+            goto out;
+        }
+
+        target = (char *)k->data.scalar.value;
+
+        if (strcmp(target, "object") != 0 && strcmp(target, "instance") != 0)
+        {
+            ERROR(CS_YAML_ERR_PREFIX "error. "
+                  "There should be only \"object\" or \"instance\" in YAML. "
+                  "However it is \"%s\"", target);
+            rc = TE_EINVAL;
+            goto out;
+        }
+
+        v = yaml_document_get_node(&dy, pair->value);
+
+        if (v->type != YAML_MAPPING_NODE)
+        {
+            ERROR(CS_YAML_ERR_PREFIX "error. "
+                  "There should be a mapping in YAML");
+            rc = TE_EINVAL;
+            goto out;
+        }
+
+        bool need_to_write = false;
+
+        /* Do we need this instance? or object???? */
+        pair = v->data.mapping.pairs.start;
+        do {
+            yaml_node_t *kk = yaml_document_get_node(&dy, pair->key);
+            yaml_node_t *vv = yaml_document_get_node(&dy, pair->value);
+
+            if (kk->type != YAML_SCALAR_NODE)
+            {
+                ERROR(CS_YAML_ERR_PREFIX "error. "
+                      "There should be a scalar in YAML");
+                rc = TE_EINVAL;
+                goto out;
+            }
+            if (strcmp((const char *)kk->data.scalar.value, "oid") == 0)
+            {
+                if (vv->type != YAML_SCALAR_NODE)
+                {
+                    ERROR(CS_YAML_ERR_PREFIX "error. "
+                          "There should be a scalar in YAML");
+                    rc = TE_EINVAL;
+                    goto out;
+                }
+
+                const char *oid = (const char *)vv->data.scalar.value;
+
+                TE_VEC_FOREACH(subtrees, subtree)
+                {
+                     /* There was a trimming. Should I make it? */
+                    if (strstr(oid, *subtree) == oid)
+                        {
+                            need_to_write = true;
+                            break;
+                        }
+                }
+            }
+        } while ((++pair < v->data.mapping.pairs.top) && !need_to_write);
+        if (need_to_write)
+        {
+            fprintf(f_out, "- %s:\n", target);
+            pair = v->data.mapping.pairs.start;
+            do {
+                yaml_node_t *kk = yaml_document_get_node(&dy, pair->key);
+                yaml_node_t *vv = yaml_document_get_node(&dy, pair->value);
+
+                if (strcmp((const char *)kk->data.scalar.value, "depends") != 0)
+                {
+                    if (vv->type != YAML_SCALAR_NODE ||
+                        kk->type != YAML_SCALAR_NODE)
+                    {
+                        ERROR(CS_YAML_ERR_PREFIX "error. "
+                              "There should be a scalar in YAML");
+                        rc = TE_EINVAL;
+                        goto out;
+                    }
+
+                    fprintf(f_out, "    %s: \"%s\"\n", kk->data.scalar.value,
+                            vv->data.scalar.value);
+                }
+                else
+                {
+                    yaml_node_item_t *dep_item;
+
+                    fprintf(f_out, "- depends:\n");
+                    if (vv->type != YAML_SEQUENCE_NODE)
+                    {
+                        ERROR(CS_YAML_ERR_PREFIX "error. "
+                              "There should be a sequence in YAML");
+                        rc = TE_EINVAL;
+                        goto out;
+                    }
+                    dep_item = vv->data.sequence.items.start;
+                    do {
+                        yaml_node_t *node_dep_item =
+                                     yaml_document_get_node(&dy, *dep_item);
+                        yaml_node_t *kkk;
+                        yaml_node_t *vvv;
+
+                        if (node_dep_item->type != YAML_MAPPING_NODE)
+                        {
+                            ERROR(CS_YAML_ERR_PREFIX "error. "
+                                  "There should be a mapping in YAML");
+                            rc = TE_EINVAL;
+                            goto out;
+                        }
+
+                        pair = v->data.mapping.pairs.start;
+                        if (v->data.mapping.pairs.top -
+                            v->data.mapping.pairs.start != 2)
+                        {
+                            ERROR(CS_YAML_ERR_PREFIX "error. There should be "
+                                  "exactly two keys (oid and scope). %d+2=%d",
+                                  node_item->data.mapping.pairs.start,
+                                  node_item->data.mapping.pairs.top);
+                            rc = TE_EINVAL;
+                            goto out;
+                        }
+
+                        kkk = yaml_document_get_node(&dy, pair->key);
+                        vvv = yaml_document_get_node(&dy, pair->value);
+                        if (vvv->type != YAML_SCALAR_NODE ||
+                            kkk->type != YAML_SCALAR_NODE)
+                        {
+                            ERROR(CS_YAML_ERR_PREFIX "error. "
+                                  "There should be a scalar in YAML");
+                            rc = TE_EINVAL;
+                            goto out;
+                        }
+                        fprintf(f_out, "      - %s: \"%s\"\n",
+                                kkk->data.scalar.value,
+                                vvv->data.scalar.value);
+
+                        pair++;
+                        kkk = yaml_document_get_node(&dy, pair->key);
+                        vvv = yaml_document_get_node(&dy, pair->value);
+                        if (vvv->type != YAML_SCALAR_NODE ||
+                            kkk->type != YAML_SCALAR_NODE)
+                        {
+                            ERROR(CS_YAML_ERR_PREFIX "error. "
+                                  "There should be a scalar in YAML");
+                            rc = TE_EINVAL;
+                            goto out;
+                        }
+                        fprintf(f_out, "        %s: \"%s\"\n",
+                                kkk->data.scalar.value,
+                                vvv->data.scalar.value);
+                    } while (++dep_item < vv->data.sequence.items.top);
+
+                }
+
+                /* HERE WE NEED TO WRITE */
+
+            } while ((++pair < v->data.mapping.pairs.top) && !need_to_write);
+        }
+
+    } while (++item < root->data.sequence.items.top);
+
+    if (rc != 0)
+    {
+        ERROR(CS_YAML_ERR_PREFIX
+              "encountered some error(s) on file '%s' processing to file %s",
+              current_backup, target_backup);
+        goto out;
+    }
+
+out:
+    yaml_document_delete(&dy);
+    yaml_parser_delete(&parser);
+    fprintf(f_out, "# End of subtree backup file\n");
+    fclose(f_out);
+
+    return rc;
+}

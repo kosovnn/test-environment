@@ -41,4 +41,28 @@ extern te_errno parse_config_yaml(const char *filename,
                                   xmlNodePtr xn_history_root,
                                   const char *conf_dirs);
 
+/**
+ * Parse YAML backup file to XML structure
+ *
+ * @param file         path name of the file
+ * @param root         XML structure, it should be freed
+ *
+ * @return int status code (see te_errno.h)
+ */
+te_errno
+yaml_parse_backup_to_xml(const char *filename, xmlNodePtr ptr_backup);
+
+/**
+ * Modify YAML backup file using filters and write it to target_backup file
+ *
+ * @param filter_filename       path name of the filter file
+ * @param current_backup        path name of the current backup file
+ * @param target_backup         path name of the target backup file
+ *
+ * @return int status code (see te_errno.h)
+ */
+te_errno
+yaml_parse_filter_subtrees(const te_vec *subtrees, const char *current_backup,
+                           const char *target_backup);
+
 #endif /* __TE_CONF_YAML_H__ */
