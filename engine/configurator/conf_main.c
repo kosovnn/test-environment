@@ -12,6 +12,7 @@
 #include "conf_defs.h"
 #if WITH_CONF_YAML
 #include "conf_yaml.h"
+#include "conf_cyaml.h"
 #endif /* WITH_CONF_YAML */
 #include "conf_rcf.h"
 #include "conf_ipc.h"
@@ -402,6 +403,7 @@ parse_config_dh_sync(xmlNodePtr root_node, te_kvpair_h *expand_vars)
     return rc;
 }
 
+#if 0
 /**
  * Parse and execute the configuration file.
  *
@@ -471,6 +473,82 @@ parse_config_xml(const char *file, te_kvpair_h *expand_vars, te_bool history,
     rcf_log_cfg_changes(FALSE);
 
     xmlFreeNode(root);
+    return rc;
+}
+#endif
+
+/**
+ * Parse and execute the configuration file.
+ *
+ * @param file          path name of the file
+ * @param expand_vars   List of key-value pairs for expansion in file,
+ *                      @c NULL if environment variables are used for
+ *                      substitutions
+ * @param history       if TRUE, the configuration file must be a history,
+ *                      otherwise, it must be a backup
+ * @param subtrees      Vector of the subtrees to execute the configuration
+ *                      file.
+ *
+ * @return status code (see te_errno.h)
+ */
+static int
+NEW_parse_config(const char *file, te_kvpair_h *expand_vars, te_bool history,
+                 const te_vec *subtrees)
+{
+    int         rc;
+
+    if (file == NULL)
+        return 0;
+
+    if (history)
+    {
+        xmlNodePtr  root;
+
+        RING("Parsing history file %s", file);
+
+        root = xmlNewNode(NULL, BAD_CAST "backup");
+
+        rc = yaml_parse_backup_to_xml(file, root);
+        if (rc != 0)
+        {
+            ERROR("Couldn't parse yaml to xml");
+            return rc;
+        }
+
+        rcf_log_cfg_changes(TRUE);
+        if (xmlStrcmp(root->name, (const xmlChar *)"history") != 0)
+        {
+            ERROR("File '%s' is not an expected history", file);
+            rc = TE_RC(TE_CS, TE_EINVAL);
+        }
+        else
+        {
+            rc = parse_config_dh_sync(root, expand_vars);
+        }
+    }
+    else
+    {
+        backup_seq *backup;
+        cyaml_err_t err;
+
+
+        RING("Parsing backup file %s", file);
+        err = cyaml_load_file(file, &cyaml_config,
+                              &backup_schema, (cyaml_data_t **) &backup, NULL);
+        rc = te_process_cyaml_errors(err);
+
+        if (rc != 0)
+        {
+            ERROR("Couldn't parse yaml file %s", file);
+            return rc;
+        }
+
+//        print_backup(backup);/* MY COMMENT */
+        rcf_log_cfg_changes(TRUE);
+        rc = NEW_cfg_backup_process_structure(backup, TRUE, subtrees);
+    }
+    rcf_log_cfg_changes(FALSE);
+
     return rc;
 }
 
@@ -1923,7 +2001,7 @@ verify_backup(const char *backup, te_bool log, const char *msg,
     char diff_file[RCF_MAX_PATH];
     int  rc;
 
-    if ((rc = cfg_backup_create_file(filename, subtrees)) != 0)
+    if ((rc = NEW_cfg_backup_create_file(filename, subtrees)) != 0)
         return rc;
 
     TE_SPRINTF(diff_file, "%s/te_cs.diff", getenv("TE_TMP"));
@@ -2231,7 +2309,7 @@ process_backup(cfg_backup_msg *msg, te_bool release_dh)
             sprintf(backup_filename, CONF_BACKUP_NAME,
                     tmp_dir, getpid(), get_time_ms());
 
-            if ((msg->rc = cfg_backup_create_file(backup_filename,
+            if ((msg->rc = NEW_cfg_backup_create_file(backup_filename,
                                                   &subtrees_vec)) != 0)
             {
                 break;;
@@ -2300,7 +2378,7 @@ process_backup(cfg_backup_msg *msg, te_bool release_dh)
                 break;
             }
 
-            msg->rc = parse_config_xml(backup.ptr, NULL, FALSE, &subtrees_vec);
+            msg->rc = NEW_parse_config(backup.ptr, NULL, FALSE, &subtrees_vec);
             rcf_log_cfg_changes(FALSE);
 
             if (release_dh)
@@ -2664,7 +2742,7 @@ cfg_process_msg(cfg_msg **msg, te_bool update_dh)
             }
             else
             {
-                (*msg)->rc = cfg_backup_create_file(
+                (*msg)->rc = NEW_cfg_backup_create_file(
                                  ((cfg_config_msg *)(*msg))->filename, NULL);
             }
             break;
@@ -2894,7 +2972,7 @@ parse_config(const char *fname, te_kvpair_h *expand_vars)
     fclose(f);
 
     if (strcmp(str, "<?xml") == 0)
-        return parse_config_xml(fname, expand_vars, TRUE, NULL);
+        return NEW_parse_config(fname, expand_vars, TRUE, NULL);
 #if WITH_CONF_YAML
     else if (strcmp(str, "---") == 0)
         return parse_config_yaml(fname, expand_vars, NULL, cs_dirs_cfg);
@@ -2986,7 +3064,7 @@ main(int argc, char **argv)
     }
 
     if (cs_sniff_cfg_file != NULL &&
-        (rc = parse_config_xml(cs_sniff_cfg_file, NULL, TRUE, NULL)) != 0)
+        (rc = NEW_parse_config(cs_sniff_cfg_file, NULL, TRUE, NULL)) != 0)
     {
         ERROR("Fatal error during sniffer configuration file parsing");
         goto exit;

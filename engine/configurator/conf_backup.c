@@ -9,7 +9,9 @@
 
 #include "conf_defs.h"
 #include "te_alloc.h"
+#include "conf_cyaml.h"
 
+#if 1
 /**
  * Parses all object dependencies in the configuration file.
  * Note: this function is also used in conf_dh.c.
@@ -79,6 +81,63 @@ cfg_register_dependency(xmlNodePtr node, const char *dependant)
         free(msg);
         xmlFree(oid);
         xmlFree(scope);
+    }
+    return rc;
+}
+#endif
+
+/**
+ * Parses all object dependencies in the configuration file.
+ * Note: this function is NOT also used in conf_dh.c.
+ *                      !!!!!!!!!!!!!!!!!!!!!
+ * @param node     first dependency node
+ */
+int
+NEW_cfg_register_dependency(object_type *object, const char *dependant)
+{
+    const char *oid = NULL;
+    te_bool scope;
+    cfg_add_dependency_msg *msg = NULL;
+    cfg_handle              dep_handle;
+
+    int      rc = 0;
+    unsigned len;
+    int i;
+
+    VERB("Registering dependencies for %s", dependant);
+
+    rc = cfg_db_find(dependant, &dep_handle);
+    if (rc != 0)
+    {
+        ERROR("Cannot find a dependant OID: %r", TE_RC(TE_CS, rc));
+        return rc;
+    }
+
+    for (i = 0; i < object->depends_count; i++)
+    {
+        oid = object->depends[i].oid;
+        if (oid == NULL)
+        {
+            ERROR("Missing OID attribute in depends[%d]", i);
+            return TE_EINVAL;
+        }
+        scope = (te_bool)(object->depends[i].scope);
+
+        len = sizeof(*msg) + strlen((char *)oid) + 1;
+        msg = calloc(1, len);
+        msg->type = CFG_ADD_DEPENDENCY;
+        msg->len = len;
+        msg->rc = 0;
+        msg->handle = dep_handle;
+        msg->object_wide =scope;
+        strcpy(msg->oid, oid);
+        cfg_process_msg((cfg_msg **)&msg, TRUE);
+        if (msg->rc != 0)
+        {
+            ERROR("Cannot add dependency for %s: %r", oid, msg->rc);
+            rc = msg->rc;
+        }
+        free(msg);
     }
     return rc;
 }
@@ -248,6 +307,120 @@ register_objects(xmlNodePtr *node, te_bool reg)
     return 0;
 }
 
+
+/**
+ * Parse all objects specified in the configuration file.
+ *
+ * @param backup         the backup structure
+ * @param first_num_inst the first number of instance in backup
+ * @param reg            if TRUE, register objects
+ *
+ * @return status code (see te_errno.h)
+ */
+static int
+NEW_register_objects(backup_seq *backup, unsigned int *first_num_inst, te_bool reg)
+{
+    int i;
+    for (i = 0; i < backup->entries_count; i++)
+    {
+        cfg_register_msg *msg;
+
+        char *oid  = NULL;
+        char *def_val  = NULL;
+        int len;
+
+        if (backup->entries[i].object == NULL)
+        {
+            *first_num_inst = i;
+            break;
+        }
+
+        if (!reg)
+            continue;
+
+        oid = (char *)backup->entries[i].object->oid;
+        if (oid == NULL)
+        {
+            ERROR("Incorrect description of the object number %d", i);
+            return TE_EINVAL;
+        }
+
+        def_val = (char *)backup->entries[i].object->def_val;
+//WTF????
+//        parent_dep = xmlGetProp(cur, (const xmlChar *)"parent-dep");
+
+        len = sizeof(cfg_register_msg) + strlen(oid) + 1 +
+              (def_val == NULL ? 0 : strlen(def_val) + 1);
+
+        if ((msg = (cfg_register_msg *)calloc(1, len)) == NULL)
+        {
+            return TE_ENOMEM;
+        }
+
+        msg->type = CFG_REGISTER;
+        msg->len = len;
+        msg->rc = 0;
+        msg->access = CFG_READ_CREATE;
+//        msg->no_parent_dep = FALSE;
+//WTF???
+        msg->no_parent_dep = backup->entries[i].object->no_parent_dep;
+//        msg->no_parent_dep = (parent_dep != NULL &&
+//                              xmlStrcmp(parent_dep,
+//                                        (const xmlChar *)"no") == 0);
+        msg->val_type = CVT_NONE;
+        msg->substitution = FALSE;
+        strcpy(msg->oid, oid);
+        if (def_val != NULL)
+        {
+            msg->def_val = strlen(msg->oid) + 1;
+            strcpy(msg->oid + msg->def_val, def_val);
+        }
+
+/**
+ * Log error, deallocate resource and return from function.
+ *
+ * @param _rc   - return code
+ * @param _str  - log message
+ */
+#define RETERR(_rc, _str...)    \
+    do {                        \
+        int _err = (_rc);       \
+                                \
+        ERROR(_str);          \
+        free(msg);              \
+        return _err;            \
+    } while (0)
+
+        msg->val_type = (backup->entries[i].object->type);
+
+        msg->unit = (te_bool)backup->entries[i].object->unit;
+
+        if (def_val != NULL)
+        {
+            cfg_inst_val val;
+
+            if (cfg_types[msg->val_type].str2val(def_val, &val) != 0)
+                RETERR(TE_EINVAL, "Incorrect default value %s", def_val);
+
+            cfg_types[msg->val_type].free(val);
+        }
+
+        msg->access = backup->entries[i].object->access;
+
+        cfg_process_msg((cfg_msg **)&msg, TRUE);
+        if (msg->rc != 0)
+            RETERR(msg->rc, "Failed to register object %s", msg->oid);
+
+        NEW_cfg_register_dependency(backup->entries[i].object, msg->oid);
+
+        free(msg);
+        msg = NULL;
+#undef RETERR
+    }
+
+    return 0;
+}
+
 /**
  * Release memory allocated for list of instances.
  *
@@ -352,6 +525,98 @@ parse_instances(xmlNodePtr node, cfg_instance **list,
                 RETERR(rc, "Value conversion error for %s", oid);
             }
             xmlFree(val_s);
+            val_s = NULL;
+        }
+        else if (val_s != NULL)
+            RETERR(TE_EINVAL, "Value is prohibited for %s", oid);
+#undef RETERR
+
+        if (prev != NULL)
+            prev->bkp_next = tmp;
+        else
+            *list = tmp;
+
+        prev = tmp;
+        num++;
+    }
+
+    *list_size = num;
+    return 0;
+}
+
+
+/**
+ * Parse instance nodes of the configuration file to list of instances.
+ *
+ * @param backup           The backup structure
+ * @param first_num_inst   Number of the first instance in backup
+ * @param list             Location for instance list pointer
+ * @param list_size        Where to save number of instances in the list
+ *
+ * @return Status code (see te_errno.h).
+ */
+static int
+NEW_parse_instances(backup_seq *backup, unsigned first_num_inst,
+                cfg_instance **list,
+                unsigned int *list_size)
+{
+    cfg_instance *prev = NULL;
+    int           rc;
+
+    unsigned int num = 0;
+    unsigned i;
+
+    *list = NULL;
+
+/**
+ * Log error, deallocate resource and return from function.
+ *
+ * @param _rc   - return code
+ * @param _str  - log message
+ */
+#define RETERR(_err, _str...)   \
+    do {                        \
+        ERROR(_str);          \
+        free_instances(*list);  \
+        return _err;            \
+    } while (0)
+
+    for (i = first_num_inst; i < backup->entries_count; i++)
+    {
+        cfg_instance *tmp;
+        const char *oid   = NULL;
+        const char *val_s = NULL;
+
+        if (backup->entries[i].instance == NULL)
+        {
+            RETERR(TE_EINVAL, "Incorrect instance number %d", i);
+        }
+
+        oid = backup->entries[i].instance->oid;
+
+        if ((tmp = (cfg_instance *)calloc(sizeof(*tmp), 1)) == NULL)
+            RETERR(TE_ENOMEM, "No enough memory");
+
+        tmp->oid = (char *)oid;
+
+        if ((tmp->obj = cfg_get_object(oid)) == NULL)
+            RETERR(TE_EINVAL, "Cannot find the object for instance %s",
+                   oid);
+
+        if (cfg_db_find(oid, &(tmp->handle)) != 0)
+            tmp->handle = CFG_HANDLE_INVALID;
+
+        val_s = backup->entries[i].instance->value;
+        if (tmp->obj->type != CVT_NONE)
+        {
+            if (val_s == NULL)
+                RETERR(TE_ENOENT, "Value is necessary for %s", oid);
+
+            if ((rc = cfg_types[tmp->obj->type].str2val((char *)val_s,
+                                                        &(tmp->val))) != 0)
+            {
+                RETERR(rc, "Value conversion error for %s", oid);
+            }
             val_s = NULL;
         }
         else if (val_s != NULL)
@@ -1067,7 +1332,7 @@ restore_entries(cfg_instance *list, unsigned int list_size,
 
     return 0;
 }
-
+#if 1
 /**
  * Process "backup" configuration file or backup file.
  *
@@ -1111,6 +1376,55 @@ cfg_backup_process_file(xmlNodePtr node, te_bool restore,
 
     return restore_entries(list, list_size, subtrees);
 }
+#endif
+
+/**
+ * Process backup structure obtained from "backup" configuration file
+ * or backup file.
+ *
+ * @param backup   the backup structure
+ * @param restore  if TRUE, the configuration should be restored after
+ *                 unsuccessful dynamic history restoring
+ * @param subtrees Vector of the subtrees to restore. May be @c NULL for
+ *                 the root.
+ *
+ * @return status code (errno.h)
+ */
+int
+NEW_cfg_backup_process_structure(backup_seq *backup, te_bool restore,
+                        const te_vec *subtrees)
+{
+    cfg_instance *list;
+    unsigned int list_size;
+    unsigned int first_num_inst;
+
+    int           rc;
+
+    if (backup == NULL || backup->entries_count == 0)
+        return 0;
+
+    RING("Processing backup structure from file");
+
+    if ((rc = NEW_register_objects(backup, &first_num_inst, !restore)) != 0)
+        return rc;
+
+    if ((rc = NEW_parse_instances(backup, first_num_inst, &list, &list_size)) != 0)
+        return rc;
+
+    if (!restore)
+    {
+        if ((rc = cfg_ta_sync("/:", TRUE)) != 0)
+        {
+            ERROR("Cannot synchronize database with Test Agents");
+            return rc;
+        }
+    }
+
+    return restore_entries(list, list_size, subtrees);
+}
+
+
+
 
 /**
  * Save current version of the TA subtree,
@@ -1209,16 +1523,17 @@ put_object(FILE *f, cfg_object *obj)
 
         if (obj->def_val != NULL)
         {
-            xmlChar *xml_str = xmlEncodeEntitiesReentrant(NULL,
-                                   (const xmlChar *)obj->def_val);
-
-            if (xml_str == NULL)
-            {
-                ERROR("xmlEncodeEntitiesReentrant() failed");
-                return;
-            }
-            fprintf(f, "      default: \"%s\"\n", xml_str);
-            xmlFree(xml_str);
+//            xmlChar *xml_str = xmlEncodeEntitiesReentrant(NULL,
+//                                   (const xmlChar *)obj->def_val);
+//
+//            if (xml_str == NULL)
+//            {
+//                ERROR("xmlEncodeEntitiesReentrant() failed");
+//                return;
+//            }
+//            fprintf(f, "      default: \"%s\"\n", xml_str);
+            fprintf(f, "      default: \"%s\"\n", obj->def_val);
+//            xmlFree(xml_str);
         }
 
         if (obj->unit)
@@ -1244,6 +1559,88 @@ put_object(FILE *f, cfg_object *obj)
 }
 
 /**
+ * Count the number of instances in structure
+ */
+static unsigned int NEW_count_instances(cfg_instance *inst)
+{
+    unsigned int i = 0;
+    if (inst != &cfg_inst_root && !cfg_inst_agent(inst) &&
+        !cfg_instance_volatile(inst))
+        i = 1;
+
+    for (inst = inst->son; inst != NULL; inst = inst->brother)
+        i+= NEW_count_instances(inst);
+    return i;
+}
+
+/**
+ * Count the number of objects in structure
+ */
+static unsigned int NEW_count_objects(cfg_object *obj)
+{
+    unsigned int i = 0;
+
+    if (obj != &cfg_obj_root && !cfg_object_agent(obj))
+        i = 1;
+
+
+    for (obj = obj->son; obj != NULL; obj = obj->brother)
+        i+= NEW_count_objects(obj);
+    return i;
+}
+
+/**
+ * Put description of the object and its (grand-...)children to
+ * the backup structure.
+ *
+ * @param backup backup structure
+ * @param pi     pointer to number of the item to put in array
+ *               backup->entries[]. The number incremented at the end.
+ * @param obj    object
+ */
+static void
+NEW_put_objects(backup_seq *backup, unsigned int *pi,  cfg_object *obj)
+{
+    unsigned int i = *pi;
+
+    backup->entries[i].object = TE_ALLOC(sizeof(object_type));
+    if (obj != &cfg_obj_root && !cfg_object_agent(obj))
+    {
+        backup->entries[i].object->oid = strdup(obj->oid);
+        backup->entries[i].object->access = obj->access;
+        backup->entries[i].object->type = obj->type;
+        if (obj->def_val == NULL)
+            backup->entries[i].object->def_val = NULL;
+        else
+            backup->entries[i].object->def_val = strdup(obj->def_val);
+        backup->entries[i].object->unit = obj->unit;
+        if (obj->depends_on != NULL)
+        {
+            unsigned int j;
+            cfg_dependency *dep;
+
+            for (dep = obj->depends_on; dep != NULL; dep = dep->next)
+                backup->entries[i].object->depends_count++;
+
+            backup->entries[i].object->depends =
+                             TE_ALLOC(sizeof(depends_entry) *
+                                    backup->entries[i].object->depends_count);
+
+            for (dep = obj->depends_on, j =0;
+                 dep != NULL;
+                 dep = dep->next, j++)
+            {
+                backup->entries[i].object->depends[j].oid = strdup(dep->depends->oid);
+                backup->entries[i].object->depends[j].scope = dep->object_wide;
+            }
+        }
+    (*pi)++;
+    }
+    for (obj = obj->son; obj != NULL; obj = obj->brother)
+        NEW_put_objects(backup, pi, obj);
+}
+
+/**
  * Put description of the object instance and its (grand-...)children to
  * the configuration file.
  *
@@ -1265,7 +1662,7 @@ put_instance(FILE *f, cfg_instance *inst)
         if (inst->obj->type != CVT_NONE)
         {
             char    *val_str = NULL;
-            xmlChar *xml_str;
+//            xmlChar *xml_str;
             int      rc;
 
             rc = cfg_types[inst->obj->type].val2str(inst->val, &val_str);
@@ -1276,18 +1673,66 @@ put_instance(FILE *f, cfg_instance *inst)
                 return rc;
             }
 
-            xml_str = xmlEncodeEntitiesReentrant(NULL, (xmlChar *)val_str);
-            free(val_str);
-            if (xml_str == NULL)
-                return TE_ENOMEM;
+//            xml_str = xmlEncodeEntitiesReentrant(NULL, (xmlChar *)val_str);
+//            if (xml_str == NULL)
+//                return TE_ENOMEM;
 
-            fprintf(f, "      value: \"%s\"\n", xml_str);
-            free(xml_str);
+//            fprintf(f, "      value: \"%s\"\n", xml_str);
+            fprintf(f, "      value: \"%s\"\n", val_str);
+            free(val_str);
+//            free(xml_str);
          }
          fprintf(f, "\n");
     }
     for (inst = inst->son; inst != NULL; inst = inst->brother)
         if (put_instance(f, inst) != 0)
+            return TE_ENOMEM;
+
+    return 0;
+}
+
+/**
+ * Put description of the object instance and its (grand-...)children to
+ * the configuration file.
+ *
+ * @param backup backup structure
+ * @param pi     pointer to number of the item to put in array
+ *               backup->entries[]. The number incremented at the end.
+ * @param inst   object instance
+ *
+ * @return 0 (success) or TE_ENOMEM
+ */
+static int
+NEW_put_instances(backup_seq *backup, unsigned int *pi,
+                  cfg_instance *inst)
+{
+    int i = *pi;
+    if (inst != &cfg_inst_root && !cfg_inst_agent(inst) &&
+        !cfg_instance_volatile(inst))
+    {
+        backup->entries[i].instance = TE_ALLOC(sizeof(instance_type));
+        backup->entries[i].instance->oid = strdup(inst->oid);
+
+        if (inst->obj->type != CVT_NONE)
+        {
+            char    *val_str = NULL;
+            int      rc;
+
+            rc = cfg_types[inst->obj->type].val2str(inst->val, &val_str);
+            if (rc != 0)
+            {
+                printf("Conversion failed for instance %s type %d\n",
+                       inst->oid, inst->obj->type);
+                return rc;
+            }
+
+            backup->entries[i].instance->value = strdup(val_str);
+            free(val_str);
+         }
+    (*pi)++;
+    }
+    for (inst = inst->son; inst != NULL; inst = inst->brother)
+        if (NEW_put_instances(backup, pi, inst) != 0)
             return TE_ENOMEM;
 
     return 0;
@@ -1306,6 +1751,22 @@ put_instance_by_oid(FILE *f, const char *oid)
     }
 
     return put_instance(f, inst);
+}
+
+static te_errno
+NEW_put_instance_by_oid(backup_seq *backup, unsigned int *pi,
+                        const char *oid)
+{
+    cfg_instance *inst;
+
+    inst = cfg_get_ins_by_ins_id_str(oid);
+    if (inst == NULL)
+    {
+        ERROR("Failed to find instance with OID %s", oid);
+        return TE_ENOENT;
+    }
+
+    return NEW_put_instances(backup, pi, inst);
 }
 
 /**
@@ -1364,6 +1825,64 @@ cfg_backup_create_file(const char *filename, const te_vec *subtrees)
     return 0;
 }
 
+/**
+ * Create "backup" cyaml struture and then serialize it configuration file
+ * with specified name.
+ *
+ * @param filename      name of the file to be created
+ * @param subtrees      Vector of the subtrees to create a backup file.
+ *                      @c NULL to create backup fo all the subtrees
+ *
+ * @return status code (errno.h)
+ */
+int
+NEW_cfg_backup_create_file(const char *filename, const te_vec *subtrees)
+{
+    backup_seq *backup = TE_ALLOC(sizeof(backup_seq));
+    te_errno rc = 0;
+    unsigned int objects_count = NEW_count_objects(&cfg_obj_root);
+    unsigned int instances_count = NEW_count_instances(&cfg_inst_root);
+    unsigned int i;
+    cyaml_err_t err;
+
+    backup->entries_count = objects_count + instances_count;
+    backup->entries = TE_ALLOC(sizeof(backup_entry) *
+                             backup->entries_count);
+    i = 0;
+    NEW_put_objects(backup, &i, &cfg_obj_root);
+
+    if (subtrees != NULL && te_vec_size(subtrees) != 0)
+    {
+        char * const *subtree;
+
+        TE_VEC_FOREACH(subtrees, subtree)
+        {
+            rc = NEW_put_instance_by_oid(backup, &i, *subtree);
+            if (rc != 0)
+            {
+                cyaml_free(&cyaml_config, &backup_schema, backup, 0);
+                return rc;
+            }
+        }
+    }
+    else
+    {
+        rc = NEW_put_instances(backup, &i, &cfg_inst_root);
+
+        if (rc != 0)
+        {
+            cyaml_free(&cyaml_config, &backup_schema, backup, 0);
+            return rc;
+        }
+    }
+
+    err = cyaml_save_file(filename, &cyaml_config,
+                          &backup_schema, backup, 0);
+    rc = te_process_cyaml_errors(err);
+
+    cyaml_free(&cyaml_config, &backup_schema, backup, 0);
+    return rc;
+}
 static te_errno
 cfg_backup_wrapper(const char *filename, const te_vec *subtrees, uint8_t op)
 {
