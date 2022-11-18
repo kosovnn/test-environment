@@ -15,7 +15,8 @@ sources = [
     'conf_backup.c',
     'conf_rcf.c',
     'conf_ta.c',
-    'conf_print.c'
+    'conf_print.c',
+    'conf_cyaml.c'
 ]
 
 te_cs_deps = [
