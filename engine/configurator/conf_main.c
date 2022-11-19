@@ -2097,32 +2097,75 @@ static te_errno
 filter_backup_by_subtrees(const char *current_backup, const te_vec *subtrees,
                           te_string *target_backup)
 {
+#if 0
     te_string filter_cmd = TE_STRING_INIT;
     te_string xslt_file = TE_STRING_INIT;
     te_string filter_filename = TE_STRING_INIT;
+#endif
+    backup_seq *backup;
     te_errno rc;
+    unsigned int i, j;
+    char *const *subtree;
+    te_bool need_to_delete;
+    cyaml_err_t err;
+
 
     if (subtrees == NULL || te_vec_size(subtrees) == 0)
         return te_string_append(target_backup, "%s", current_backup);
 
-    rc = te_string_append(&filter_filename, CONF_FILTERS_FILE_NAME,
-                          tmp_dir, getpid(), get_time_ms());
-    if (rc != 0)
-        goto out;
-
     rc = te_string_append(target_backup, CONF_SUBTREE_BACKUP_NAME,
                           tmp_dir, getpid(), get_time_ms());
     if (rc != 0)
-        goto out;
+        return rc;
 
-    rc = yaml_parse_filter_subtrees(subtrees, current_backup,
-                                    target_backup->ptr);
+    err = cyaml_load_file(current_backup, &cyaml_config,
+                          &backup_schema, (cyaml_data_t **) &backup, NULL);
+    rc = te_process_cyaml_errors(err);
 
-out:
-    te_string_free(&filter_cmd);
-    te_string_free(&xslt_file);
-    te_string_free(&filter_filename);
+    if (rc != 0)
+    {
+        ERROR("Couldn't parse yaml file %s", current_backup);
+        return rc;
+    }
+    for (i = 0; i < backup->entries_count; i++)
+    {
+        char *oid = NULL;
 
+        if (backup->entries[i].object != NULL)
+            oid = strdup(backup->entries[i].object->oid);
+        else if(backup->entries[i].instance != NULL)
+            oid = strdup(backup->entries[i].instance->oid);
+
+        need_to_delete = true;
+        TE_VEC_FOREACH(subtrees, subtree)
+        {
+            if (strstr(oid, *subtree) == oid)
+                {
+                    need_to_delete = false;
+                    break;
+                }
+        }
+
+        if (need_to_delete)
+        {
+                cyaml_free(&cyaml_config, &backup_entry_schema,
+                           &backup->entries[i], 0);
+        }
+        else
+        {
+            backup->entries[j].object = backup->entries[i].object;
+            backup->entries[j].instance = backup->entries[i].instance;
+            j++;
+        }
+        free(oid);
+    }
+    backup->entries_count = j;
+
+    err = cyaml_save_file(target_backup->ptr, &cyaml_config,
+                          &backup_schema, backup, 0);
+    rc = te_process_cyaml_errors(err);
+
+    cyaml_free(&cyaml_config, &backup_schema, backup, 0);
     return rc;
 }
 
