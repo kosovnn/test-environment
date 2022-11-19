@@ -67,6 +67,39 @@ typedef struct backup_seq {
     uint entries_count;
 } backup_seq;
 
+/* Structure for storing entry of history.
+ * The only one pointer in not equal to NULL */
+typedef struct history_entry {
+    object_type *reg; /* optional */
+    uint reg_count;
+
+    object_type *unreg; /* optional */
+    uint unreg_count;
+
+    instance_type *add; /* optional */
+    uint add_count;
+
+    instance_type *get; /* optional */
+    uint get_count;
+
+    instance_type *delete; /* optional */
+    uint delete_count;
+
+    instance_type *copy; /* optional */
+    uint copy_count;
+
+    instance_type *set; /* optional */
+    uint set_count;
+
+    char *reboot_ta; /* optional */
+} history_entry;
+
+/* Structure for storing the whole history */
+typedef struct history_seq {
+    history_entry *entries;
+    uint entries_count;
+} history_seq;
+
 /******************************************************************************
  * CYAML schema to tell libcyaml about both expected YAML and data structure.
  *
@@ -282,6 +315,18 @@ static const cyaml_schema_field_t object_fields_schema[] = {
                          object_type, depends,
                          &depends_schema, 0, CYAML_UNLIMITED),
 
+    /* If the YAML contains a field that our program is not interested in
+     * we can ignore it, so the value of the field will not be loaded.
+     *
+     * Note that unless the OPTIONAL flag is set, the ignored field must
+     * be present.
+     *
+     * Another way of handling this would be to use the config flag
+     * to ignore unknown keys.  This config is passed to libcyaml
+     * separately from the schema.
+     */
+    CYAML_FIELD_IGNORE("d", CYAML_FLAG_OPTIONAL),
+
     /* The field array must be terminated by an entry with a NULL key.
      * Here we use the CYAML_FIELD_END macro for that. */
     CYAML_FIELD_END
@@ -402,7 +447,8 @@ static const cyaml_schema_field_t backup_fields_schema[] = {
     CYAML_FIELD_END
 };
 
-/* Top-level schema. The top level value for the backup is a sequence.
+/* Top-level schema of the backup. The top level value for the backup is
+ * a sequence.
  *
  * Its fields are defined in backup_entry_fields_schema.
  */
@@ -411,6 +457,285 @@ static const cyaml_schema_value_t backup_schema = {
                         backup_seq, backup_fields_schema),
 };
 
+/* The schema of object. Its value is a mapping.
+ *
+ * Its fields are defined in object_fields_schema.
+ */
+static const cyaml_schema_value_t object_schema = {
+    CYAML_VALUE_MAPPING(CYAML_FLAG_DEFAULT,
+                        object_type, object_fields_schema),
+};
+
+/* The schema of instance. Its value is a mapping.
+ *
+ * Its fields are defined in instance_fields_schema.
+ */
+static const cyaml_schema_value_t instance_schema = {
+    CYAML_VALUE_MAPPING(CYAML_FLAG_DEFAULT,
+                        instance_type, instance_fields_schema),
+};
+
+/* The history_entry mapping's field definitions schema is an array.
+ *
+ * All the field entries will refer to their parent mapping's structure,
+ * in this case, `history_entry`.
+ */
+static const cyaml_schema_field_t history_entry_fields_schema[] = {
+    /* The first field is the register.
+     *
+     * YAML key: "register".
+     * C structure member for this key: "reg".
+     *
+     * Its CYAML type is a sequence.
+     *
+     * Since it's a sequence type, the value schema for its entries must
+     * be provided too.  In this case, it's object_schema.
+     *
+     * Since it's not a sequence of a fixed-length, we must tell CYAML
+     * where the sequence entry count is to be stored.  In this case, it
+     * goes in the "reg_count" C structure member in
+     * history_entry.
+     * Since this is "reg" with the "_count" postfix, we can use
+     * the following macro, which assumes a postfix of "_count" in the
+     * struct member name.
+     */
+    CYAML_FIELD_SEQUENCE(
+                         "register",
+                         CYAML_FLAG_POINTER | CYAML_FLAG_OPTIONAL,
+                         history_entry, reg,
+                         &object_schema, 0, CYAML_UNLIMITED),
+
+    /* The next field is the unregister.
+     *
+     * YAML key: "unregister".
+     * C structure member for this key: "unreg".
+     *
+     * Its CYAML type is a sequence.
+     *
+     * Since it's a sequence type, the value schema for its entries must
+     * be provided too.  In this case, it's object_schema.
+     *
+     * Since it's not a sequence of a fixed-length, we must tell CYAML
+     * where the sequence entry count is to be stored.  In this case, it
+     * goes in the "unreg_count" C structure member in
+     * history_entry.
+     * Since this is "unreg" with the "_count" postfix, we can use
+     * the following macro, which assumes a postfix of "_count" in the
+     * struct member name.
+     */
+    CYAML_FIELD_SEQUENCE(
+                         "unregister",
+                         CYAML_FLAG_POINTER | CYAML_FLAG_OPTIONAL,
+                         history_entry, unreg,
+                         &object_schema, 0, CYAML_UNLIMITED),
+
+    /* The next field is the add.
+     *
+     * YAML key: "add".
+     * C structure member for this key: "add".
+     *
+     * Its CYAML type is a sequence.
+     *
+     * Since it's a sequence type, the value schema for its entries must
+     * be provided too. In this case, it's instance_schema.
+     *
+     * Since it's not a sequence of a fixed-length, we must tell CYAML
+     * where the sequence entry count is to be stored. In this case, it
+     * goes in the "add_count" C structure member in
+     * history_entry.
+     * Since this is "add" with the "_count" postfix, we can use
+     * the following macro, which assumes a postfix of "_count" in the
+     * struct member name.
+     */
+    CYAML_FIELD_SEQUENCE(
+                         "add",
+                         CYAML_FLAG_POINTER | CYAML_FLAG_OPTIONAL,
+                         history_entry, add,
+                         &instance_schema, 0, CYAML_UNLIMITED),
+
+    /* The next field is the get.
+     *
+     * YAML key: "get".
+     * C structure member for this key: "get".
+     *
+     * Its CYAML type is a sequence.
+     *
+     * Since it's a sequence type, the value schema for its entries must
+     * be provided too. In this case, it's instance_schema.
+     *
+     * Since it's not a sequence of a fixed-length, we must tell CYAML
+     * where the sequence entry count is to be stored. In this case, it
+     * goes in the "get_count" C structure member in
+     * history_entry.
+     * Since this is "get" with the "_count" postfix, we can use
+     * the following macro, which assumes a postfix of "_count" in the
+     * struct member name.
+     */
+    CYAML_FIELD_SEQUENCE(
+                         "get",
+                         CYAML_FLAG_POINTER | CYAML_FLAG_OPTIONAL,
+                         history_entry, get,
+                         &instance_schema, 0, CYAML_UNLIMITED),
+
+    /* The next field is the delete.
+     *
+     * YAML key: "delete".
+     * C structure member for this key: "delete".
+     *
+     * Its CYAML type is a sequence.
+     *
+     * Since it's a sequence type, the value schema for its entries must
+     * be provided too. In this case, it's instance_schema.
+     *
+     * Since it's not a sequence of a fixed-length, we must tell CYAML
+     * where the sequence entry count is to be stored. In this case, it
+     * goes in the "delete_count" C structure member in
+     * history_entry.
+     * Since this is "delete" with the "_count" postfix, we can use
+     * the following macro, which assumes a postfix of "_count" in the
+     * struct member name.
+     */
+    CYAML_FIELD_SEQUENCE(
+                         "delete",
+                         CYAML_FLAG_POINTER | CYAML_FLAG_OPTIONAL,
+                         history_entry, delete,
+                         &instance_schema, 0, CYAML_UNLIMITED),
+
+    /* The next field is the copy.
+     *
+     * YAML key: "copy".
+     * C structure member for this key: "copy".
+     *
+     * Its CYAML type is a sequence.
+     *
+     * Since it's a sequence type, the value schema for its entries must
+     * be provided too. In this case, it's instance_schema.
+     *
+     * Since it's not a sequence of a fixed-length, we must tell CYAML
+     * where the sequence entry count is to be stored. In this case, it
+     * goes in the "copy_count" C structure member in
+     * history_entry.
+     * Since this is "copy" with the "_count" postfix, we can use
+     * the following macro, which assumes a postfix of "_count" in the
+     * struct member name.
+     */
+    CYAML_FIELD_SEQUENCE(
+                         "copy",
+                         CYAML_FLAG_POINTER | CYAML_FLAG_OPTIONAL,
+                         history_entry, copy,
+                         &instance_schema, 0, CYAML_UNLIMITED),
+
+    /* The next field is the set.
+     *
+     * YAML key: "set".
+     * C structure member for this key: "set".
+     *
+     * Its CYAML type is a sequence.
+     *
+     * Since it's a sequence type, the value schema for its entries must
+     * be provided too. In this case, it's instance_schema.
+     *
+     * Since it's not a sequence of a fixed-length, we must tell CYAML
+     * where the sequence entry count is to be stored. In this case, it
+     * goes in the "set_count" C structure member in
+     * history_entry.
+     * Since this is "set" with the "_count" postfix, we can use
+     * the following macro, which assumes a postfix of "_count" in the
+     * struct member name.
+     */
+    CYAML_FIELD_SEQUENCE(
+                         "set",
+                         CYAML_FLAG_POINTER | CYAML_FLAG_OPTIONAL,
+                         history_entry, set,
+                         &instance_schema, 0, CYAML_UNLIMITED),
+
+    /* If the YAML contains a field that our program is not interested in
+     * we can ignore it, so the value of the field will not be loaded.
+     *
+     * Note that unless the OPTIONAL flag is set, the ignored field must
+     * be present.
+     *
+     * Another way of handling this would be to use the config flag
+     * to ignore unknown keys.  This config is passed to libcyaml
+     * separately from the schema.
+     */
+    CYAML_FIELD_IGNORE("comment", CYAML_FLAG_OPTIONAL),
+
+    /* The reboot_ta in the mapping is a string.
+     *
+     * YAML key: "reboot_ta".
+     * C structure member for this key: "reboot_ta".
+     *
+     * Its CYAML type is string pointer, and we have no minimum or maximum
+     * string length constraints.
+     */
+    CYAML_FIELD_STRING_PTR(
+                           "reboot_ta", CYAML_FLAG_POINTER | CYAML_FLAG_OPTIONAL,
+                           history_entry, reboot_ta, 0, CYAML_UNLIMITED),
+
+    /* The field array must be terminated by an entry with a NULL key.
+     * Here we use the CYAML_FIELD_END macro for that. */
+    CYAML_FIELD_END
+};
+
+/* The value for a history_entry is a mapping.
+ *
+ * Its fields are defined in history_entry_fields_schema.
+ */
+static const cyaml_schema_value_t history_entry_schema = {
+
+        CYAML_VALUE_MAPPING(CYAML_FLAG_DEFAULT,
+                            history_entry,
+                            history_entry_fields_schema),
+};
+
+/* The history field definitions schema is an array.
+ *
+ * All the field entries will refer to their parent mapping's structure,
+ * in this case, `history_seq`.
+ */
+static const cyaml_schema_field_t history_fields_schema[] = {
+    /* The only field is the register, unregister, add or something.
+     *
+     * YAML key: "history".
+     * C structure member for this key: "entries".
+     *
+     * Its CYAML type is a sequence.
+     *
+     * Since it's a sequence type, the value schema for its entries must
+     * be provided too. In this case, it's history_entry_schema.
+     *
+     * Since it's not a sequence of a fixed-length, we must tell CYAML
+     * where the sequence entry count is to be stored. In this case, it
+     * goes in the "entries_count" C structure member in
+     * history_seq.
+     * Since this is "entries" with the "_count" postfix, we can use
+     * the following macro, which assumes a postfix of "_count" in the
+     * struct member name.
+     */
+    CYAML_FIELD_SEQUENCE(
+                         "history",
+                         CYAML_FLAG_POINTER | CYAML_FLAG_OPTIONAL,
+                         history_seq, entries,
+                         &history_entry_schema, 0, CYAML_UNLIMITED),
+    /* The field array must be terminated by an entry with a NULL key.
+     * Here we use the CYAML_FIELD_END macro for that. */
+    CYAML_FIELD_END
+};
+
+
+
+
+
+/* Top-level schema of the history. The top level value for the history is
+ * a sequence.
+ *
+ * Its fields are defined in history_entry_fields_schema.
+ */
+static const cyaml_schema_value_t history_schema = {
+    CYAML_VALUE_MAPPING(CYAML_FLAG_POINTER,
+                        history_seq, history_fields_schema),
+};
 
 /* Our CYAML config.
  *
@@ -434,5 +759,7 @@ te_process_cyaml_errors(cyaml_err_t err);
 /* That prints some part of debug. DOES IT NEEDED AT ALL?
  */
 extern void print_backup(backup_seq *backup);
+
+extern void print_history(history_seq *history);
 #endif /* __TE_CONF_CYAML_H__ */
 

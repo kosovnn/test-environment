@@ -114,14 +114,39 @@ void print_backup(backup_seq *backup)
     printf("Backup entries: %u\n", backup->entries_count);
     for (unsigned int i = 0;
          i < backup->entries_count;
-         i+=(backup->entries_count-i)<20?1:10)
+         i += (backup->entries_count-i) < 20 ? 1 : 10)
     {
         if (backup->entries[i].object != NULL)
 //            printf("%u. object. %s\n", i + 1, backup->entries[i].object->oid);
-            ERROR("%u. object. %s\n", i + 1, backup->entries[i].object->oid);
+            ERROR("%u. object. %s\n", i, backup->entries[i].object->oid);
         if (backup->entries[i].instance != NULL)
 //            printf("%u. instance. %s\n", i + 1, backup->entries[i].instance->oid);
             ERROR("%u. instance. %s\n", i + 1, backup->entries[i].instance->oid);
+    }
+}
+
+/* That prints some part of history.
+ */
+void print_history(history_seq *history)
+{
+//    int i;
+
+    ERROR("History entries: %u\n", history->entries_count);
+    for (unsigned int i = 0;
+         i < history->entries_count;
+         i += (history->entries_count-i) < 20 ? 1 : 10)
+    {
+        if (history->entries[i].reg != NULL)
+            ERROR("%u. register:", i);
+        for (unsigned int j =0;
+             j < history->entries[i].reg_count;
+             j++)
+        {
+            ERROR("%u. register %u \"%s\"", i, j,
+                  history->entries[i].reg[j].oid);
+        }
+//        if (backup->entries[i].instance != NULL)
+//            ERROR("%u. instance. %s\n", i + 1, backup->entries[i].instance->oid);
     }
 }
 #if 0
