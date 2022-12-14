@@ -403,6 +403,36 @@ parse_config_dh_sync(xmlNodePtr root_node, te_kvpair_h *expand_vars)
     return rc;
 }
 
+/* See description in 'conf_defs.h' */
+te_errno
+NEW_parse_config_dh_sync(history_seq *history, te_kvpair_h *expand_vars)
+{
+    te_errno rc = 0;
+    char *backup = NULL;
+
+    if ((rc = create_backup(&backup)) != 0)
+    {
+        ERROR("Failed to create a backup");
+        return rc;
+    }
+    rc = NEW_cfg_dh_process_file(history, expand_vars, FALSE);
+    if (rc == 0 && (rc = cfg_ta_sync("/:", TRUE)) != 0)
+    {
+        ERROR("Cannot synchronise database with Test Agents");
+        cfg_dh_restore_backup(backup, FALSE);
+    }
+    if (rc == 0 && (rc = NEW_cfg_dh_process_file(history, expand_vars, TRUE)) != 0)
+    {
+        ERROR("Failed to modify database after synchronisation: %r", rc);
+        cfg_dh_restore_backup(backup, FALSE);
+    }
+    if (rc == 0)
+        cfg_dh_release_backup(backup);
+    free(backup);
+
+    return rc;
+}
+
 #if 0
 /**
  * Parse and execute the configuration file.

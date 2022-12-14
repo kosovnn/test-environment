@@ -11,6 +11,7 @@
 #define __TE_CONF_DH_H__
 
 #include "te_vector.h"
+#include "conf_cyaml.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -31,6 +32,23 @@ extern "C" {
  */
 extern int cfg_dh_process_file(xmlNodePtr node, te_kvpair_h *expand_vars,
                                te_bool postsync);
+
+/**
+ * Process "history" configuration file - execute all commands
+ * and add them to dynamic history.
+ * Note: this routine does not reboot Test Agents.
+ *
+ * @param history       history structure
+ * @param expand_vars   List of key-value pairs for expansion in file,
+ *                      @c NULL if environment variables are used for
+ *                      substitutions
+ * @param postsync      is processing performed after sync with TA
+ *
+ * @return status code (errno.h)
+ */
+int
+NEW_cfg_dh_process_file(history_seq *history, te_kvpair_h *expand_vars,
+                        te_bool postsync);
 
 /**
  * Create "history" configuration file with specified name.

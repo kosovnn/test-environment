@@ -15,6 +15,10 @@
 /* defined in conf_backup.c */
 extern int cfg_register_dependency(xmlNodePtr node, const char *dependant);
 
+/* defined in conf_backup.c */
+extern int NEW_cfg_register_dependency(object_type *object,
+                                       const char *dependant);
+
 /** Backup descriptor */
 typedef struct cfg_backup {
     struct cfg_backup *next; /**< Next backup associated with this point */
@@ -212,6 +216,65 @@ cleanup:
 }
 
 /**
+ * Parse handle, oid and object of instance
+ * and check that object instance has value
+ *
+ * @param inst          instance
+ * @param handle        instance handle
+ * @oaram oid           instance OID
+ * @param obj           object of instance
+ * @param expand_vars   List of key-value pairs for expansion in file,
+ *                      @c NULL if environment variables are used for
+ *                      substitutions
+ *
+ * @return  Status code
+ */
+static te_errno
+NEW_cfg_dh_get_instance_info(instance_type *inst, cfg_handle *handle,
+                             char **oid, cfg_object **obj,
+                             const te_kvpair_h *expand_vars)
+{
+    te_errno rc = 0;
+
+    *oid = te_expand_vars_or_env(inst->oid, expand_vars);
+    if (*oid == NULL)
+    {
+        ERROR("Incorrect command format");
+        rc = TE_EINVAL;
+        goto cleanup;
+    }
+    if (cfg_db_find(*oid, handle) != 0)
+    {
+        ERROR("Cannot find instance %s", *oid);
+        rc = TE_ENOENT;
+        goto cleanup;
+    }
+
+    if (!CFG_IS_INST(*handle))
+    {
+        ERROR("OID %s is not instance", *oid);
+        rc = TE_EINVAL;
+        goto cleanup;
+    }
+
+    *obj = CFG_GET_INST(*handle)->obj;
+    if ((*obj)->type == CVT_NONE)
+    {
+        ERROR("Object instance has no value");
+        rc = TE_EINVAL;
+        goto cleanup;
+    }
+
+    return 0;
+
+cleanup:
+    free(*oid);
+    *oid = NULL;
+
+    return rc;
+}
+
+/**
  * Get value from instance and store it in either list of kvpairs or
  * environmental variable.
  *
@@ -244,6 +307,110 @@ cfg_dh_get_value_from_instance(xmlNodePtr node, te_kvpair_h *expand_vars)
 
     var_name = xmlGetProp_exp_vars_or_env(node,
             (const xmlChar *)"value", expand_vars);
+    if (var_name == NULL)
+    {
+        ERROR("Value is required for %s", oid);
+        rc = TE_EINVAL;
+        goto cleanup;
+    }
+
+    len = sizeof(cfg_get_msg) + CFG_MAX_INST_VALUE;
+    if ((msg = TE_ALLOC(len)) == NULL)
+    {
+        rc = TE_ENOMEM;
+        goto cleanup;
+    }
+
+    msg->handle = handle;
+    msg->type = CFG_GET;
+    msg->len = sizeof(cfg_get_msg);
+    msg->val_type = obj->type;
+
+    cfg_process_msg((cfg_msg **)&msg, TRUE);
+
+    if (msg->rc != 0)
+    {
+        ERROR("Failed to execute the get command for instance %s", oid);
+        rc = msg->rc;
+        goto cleanup;
+    }
+
+    rc = cfg_types[msg->val_type].get_from_msg((cfg_msg *)msg, &get_val);
+    if (rc != 0)
+    {
+        ERROR("Cannot extract value from message for %s", oid);
+        goto cleanup;
+    }
+    rc = cfg_types[msg->val_type].val2str(get_val, &get_val_s);
+    cfg_types[obj->type].free(get_val);
+    if (rc != 0)
+    {
+        ERROR("Cannot convert value to string for %s", oid);
+        goto cleanup;
+    }
+
+    if (expand_vars != NULL)
+    {
+        rc = te_kvpair_add(expand_vars, var_name, get_val_s);
+        if (rc != 0)
+        {
+            ERROR("Failed to add new entry in list of kvpairs: %r", rc);
+            goto cleanup;
+        }
+    }
+    else
+    {
+        ret = setenv(var_name, get_val_s, 1);
+        if (ret != 0)
+        {
+            ERROR("Failed to put value in environmental variable");
+            rc = TE_OS_RC(TE_CS, errno);
+            goto cleanup;
+        }
+    }
+
+cleanup:
+    free(var_name);
+    free(get_val_s);
+    free(msg);
+    free(oid);
+
+    return rc;
+}
+
+/**
+ * Get value from instance and store it in either list of kvpairs or
+ * environmental variable.
+ *
+ * @param inst          instance to get value from
+ * @param expand_vars   List of key-value pairs for expansion in file
+ *                      NULL if environmental variables used for
+ *                      substitutions
+ *
+ * @return Status code.
+ */
+static te_errno
+NEW_cfg_dh_get_value_from_instance(instance_type *inst,
+                                   te_kvpair_h *expand_vars)
+{
+    te_errno     rc;
+    int          ret;
+    size_t       len;
+    char        *oid = NULL;
+    char        *var_name = NULL;
+    char        *get_val_s = NULL;
+    cfg_get_msg *msg = NULL;
+    cfg_inst_val get_val;
+    cfg_handle   handle;
+    cfg_object  *obj;
+
+
+    rc = NEW_cfg_dh_get_instance_info(inst, &handle, &oid,
+                                      &obj, expand_vars);
+    if (rc != 0)
+        return rc;
+
+    var_name = te_expand_vars_or_env(inst->value, expand_vars);
     if (var_name == NULL)
     {
         ERROR("Value is required for %s", oid);
@@ -449,6 +616,107 @@ cleanup:
 
     return rc;
 }
+
+/**
+ * Process 'copy' command.
+ *
+ * @param inst          instance to get
+ * @param expand_vars   List of key-value pairs for expansion in file
+ *                      NULL if environmental variables used for
+ *                      substitutions
+ *
+ * @return Status code.
+ */
+static te_errno
+NEW_cfg_dh_process_copy_instance(instance_type *inst,
+                                 te_kvpair_h *expand_vars)
+{
+    te_errno      rc;
+    size_t        len;
+    size_t        oid_len;
+    char         *oid = NULL;
+    char         *val_s = NULL;
+    cfg_copy_msg *msg = NULL;
+    cfg_handle    src_handle;
+#if 0
+    while (node != NULL &&
+           xmlStrcmp(node->name , (const xmlChar *)"instance") == 0)
+    {
+        if (!xmlNodeCond(node))
+        {
+            node = xmlNodeNext(node);
+            continue;
+        }
+#endif
+#if 1
+        oid = te_expand_vars_or_env(inst->oid, expand_vars);
+        if (oid == NULL)
+        {
+            ERROR("Incorrect command format");
+            rc = TE_EINVAL;
+            goto cleanup;
+        }
+
+        oid_len = strlen(oid);
+
+        len = sizeof(cfg_copy_msg) + oid_len + 1;
+        if ((msg = calloc(1, len)) == NULL)
+        {
+            ERROR("Cannot allocate memory");
+            rc = TE_ENOMEM;
+            goto cleanup;
+        }
+
+        memcpy(msg->dst_oid, oid, oid_len + 1);
+        msg->is_obj = (strchr(oid, ':') == NULL) ? TRUE : FALSE;
+
+        msg->type = CFG_COPY;
+        msg->len = sizeof(cfg_copy_msg) + oid_len + 1;
+
+        val_s = te_expand_vars_or_env(inst->value, expand_vars);
+        if (val_s == NULL)
+        {
+            ERROR("Value is required for %s to copy from", oid);
+            rc = TE_EINVAL;
+            goto cleanup;
+        }
+
+        if ((rc = cfg_db_find(val_s, &src_handle)) != 0)
+            goto cleanup;
+
+        msg->src_handle = src_handle;
+
+        cfg_process_msg((cfg_msg **)&msg, TRUE);
+        if (msg->rc != 0)
+        {
+            ERROR("Failed to execute the copy command for instance %s", oid);
+            rc = msg->rc;
+            goto cleanup;
+        }
+        free(val_s);
+        val_s = NULL;
+        free(msg);
+        msg = NULL;
+        free(oid);
+        oid = NULL;
+#endif
+#if 0
+        node = xmlNodeNext(node);
+    }
+    if (node != NULL)
+    {
+        ERROR("Incorrect copy command format");
+        rc = TE_EINVAL;
+    }
+#endif
+cleanup:
+    free(oid);
+    free(val_s);
+    free(msg);
+
+    return rc;
+}
+
 /**
  * Process 'add' command.
  *
@@ -535,6 +803,83 @@ next:
     }
     if (node != NULL)
         RETERR(TE_EINVAL, "Incorrect add command format");
+
+    return 0;
+}
+
+/**
+ * Process 'add' command.
+ *
+ * @param inst          instance that should be added
+ * @param expand_vars   list of key-value pairs for expansion in file,
+ *                      @c NULL if environment variables are used for
+ *                      substitutions
+ *
+ * @return Status code.
+ */
+static te_errno
+NEW_cfg_dh_process_add_instance(instance_type *inst,
+                                const te_kvpair_h *expand_vars)
+{
+    te_errno rc;
+    size_t len;
+    cfg_add_msg *msg = NULL;
+    cfg_inst_val val;
+    cfg_object *obj;
+    char *oid = NULL;
+    char *val_s = NULL;
+
+    oid = te_expand_vars_or_env(inst->oid, expand_vars);
+    if (oid == NULL)
+        RETERR(TE_EINVAL, "Incorrect add command format");
+
+    if ((obj = cfg_get_object(oid)) == NULL)
+        RETERR(TE_EINVAL, "Cannot find object for instance %s", oid);
+
+    len = sizeof(cfg_add_msg) + CFG_MAX_INST_VALUE +
+          strlen(oid) + 1;
+    if ((msg = (cfg_add_msg *)calloc(1, len)) == NULL)
+        RETERR(TE_ENOMEM, "Cannot allocate memory");
+
+    msg->type = CFG_ADD;
+    msg->len = sizeof(cfg_add_msg);
+    msg->val_type = obj->type;
+    msg->rc = 0;
+
+    val_s= te_expand_vars_or_env(inst->value, expand_vars);
+    if (val_s != NULL && strlen(val_s) >= CFG_MAX_INST_VALUE)
+        RETERR(TE_ENOMEM, "Too long value");
+
+    if (obj->type == CVT_NONE && val_s != NULL)
+        RETERR(TE_EINVAL, "Value is prohibited for %s", oid);
+
+    if (val_s == NULL)
+        msg->val_type = CVT_NONE; /* Default will be assigned */
+/* MY COMMENT May be I should inform about that? */
+
+    if (val_s != NULL)
+    {
+        if ((rc = cfg_types[obj->type].str2val(val_s, &val)) != 0)
+            RETERR(rc, "Value conversion error for %s", oid);
+
+        cfg_types[obj->type].put_to_msg(val, (cfg_msg *)msg);
+        cfg_types[obj->type].free(val);
+        free(val_s);
+        val_s = NULL;
+    }
+
+    msg->oid_offset = msg->len;
+    msg->len += strlen((char *)oid) + 1;
+    strcpy((char *)msg + msg->oid_offset, oid);
+    cfg_process_msg((cfg_msg **)&msg, TRUE);
+    if (msg->rc != 0)
+        RETERR(msg->rc, "Failed(%r) to execute the add command "
+                        "for instance %s", msg->rc, oid);
+
+    free(msg);
+    msg = NULL;
+    free(oid);
+    oid = NULL;
 
     return 0;
 }
@@ -986,6 +1331,302 @@ cfg_dh_process_file(xmlNodePtr node, te_kvpair_h *expand_vars,
     }
 
     return 0;
+//#undef RETERR
+}
+
+/**
+ * Process "history" configuration file - execute all commands
+ * and add them to dynamic history.
+ * Note: this routine does not reboot Test Agents.
+ *
+ * @param history       history structure
+ * @param expand_vars   List of key-value pairs for expansion in file,
+ *                      @c NULL if environment variables are used for
+ *                      substitutions
+ * @param postsync      is processing performed after sync with TA
+ *
+ * @return status code (errno.h)
+ */
+int
+NEW_cfg_dh_process_file(history_seq *history, te_kvpair_h *expand_vars,
+                        te_bool postsync)
+{
+    int len;
+    int rc;
+    int i, j;
+
+
+    if (history == NULL)
+        return 0;
+
+    for (i = 0; i < history->entries_count; i++)
+    {
+        char *oid   = NULL;
+        char *val_s = NULL;
+
+
+        if (!postsync)
+        {
+            /* register */
+            for (j = 0; j < history->entries[i].reg_count; j++)
+            {
+                cfg_register_msg *msg = NULL;
+
+                oid = te_expand_vars_or_env(history->entries[i].reg[j].oid,
+                                            expand_vars);
+                if (oid == NULL)
+                    RETERR(TE_EINVAL,
+                           "Incorrect register command format (oid)");
+#if 0
+                if (expand_vars == NULL)
+                    rc = te_expand_env_vars(history->entries[i].reg[j].oid,
+                                            NULL, &oid);
+                else
+                    rc = te_expand_kvpairs(history->entries[i].reg[j].oid,
+                                           NULL, expand_vars, &oid);
+                if (rc != 0)
+                {
+                    ERROR("Error substituting variables in %s '%s': %s",
+                          history->entries[i].reg[j].oid, oid, strerror(rc));
+                    RETERR(TE_EINVAL, "Incorrect register command format");
+                }
+#endif
+
+                val_s = (char *)history->entries[i].reg[j].def_val;
+
+                len = sizeof(cfg_register_msg) + strlen(oid) + 1 +
+                      (val_s == NULL ? 0 : strlen(val_s) + 1);
+
+                if ((msg = (cfg_register_msg *)calloc(1, len)) == NULL)
+                    RETERR(TE_ENOMEM, "Cannot allocate memory");
+
+                msg->type = CFG_REGISTER;
+                msg->len = len;
+                msg->rc = 0;
+                msg->access = history->entries[i].reg[j].access;
+
+                /* parent-dep is currently not used */
+                msg->no_parent_dep = history->entries[i].reg[j].no_parent_dep;
+
+                msg->val_type = history->entries[i].reg[j].type;
+                msg->substitution = history->entries[i].reg[j].substitution;
+                msg->unit = history->entries[i].reg[j].unit;
+
+                strcpy(msg->oid, oid);
+                if (val_s != NULL)
+                {
+                    msg->def_val = strlen(msg->oid) + 1;
+                    strcpy(msg->oid + msg->def_val, val_s);
+                }
+
+                msg->vol = history->entries[i].reg[j].volat;
+
+                if (val_s != NULL)
+                {
+                    cfg_inst_val val;
+
+                    if (cfg_types[msg->val_type].str2val(val_s,
+                                                         &val) != 0)
+                        RETERR(TE_EINVAL, "Incorrect default value %s",
+                               val_s);
+
+                    cfg_types[msg->val_type].free(val);
+                }
+
+                cfg_process_msg((cfg_msg **)&msg, TRUE);
+                if (msg->rc != 0)
+                    RETERR(msg->rc, "Failed to execute register command "
+                                    "for object %s", oid);
+
+                NEW_cfg_register_dependency(&(history->entries[i].reg[j]),
+                                            msg->oid);
+                free(msg);
+                msg = NULL;
+                free(oid);
+                oid = NULL;
+                msg = NULL;
+            }
+            /* unregister */
+            for (j = 0; j < history->entries[i].unreg_count; j++)
+            {
+                cfg_msg *msg = NULL;  /* dummy for RETERR to work */
+
+                oid = te_expand_vars_or_env(history->entries[i].unreg[j].oid,
+                                            expand_vars);
+                if (oid == NULL)
+                    RETERR(TE_EINVAL,
+                           "Incorrect unregister command format (oid)");
+#if 0
+                if (expand_vars == NULL)
+                    rc = te_expand_env_vars(history->entries[i].unreg[j].oid,
+                                            NULL, &oid);
+                else
+                    rc = te_expand_kvpairs(history->entries[i].unreg[j].oid,
+                                           NULL, expand_vars, &oid);
+                if (rc != 0)
+                {
+                    ERROR("Error substituting variables in %s '%s': %s",
+                          history->entries[i].unreg[j].oid, oid, strerror(rc));
+                    RETERR(TE_EINVAL, "Incorrect unregister command format");
+                }
+#endif
+
+                rc = cfg_db_unregister_obj_by_id_str((char *)oid,
+                                                     TE_LL_WARN);
+                if (rc != 0)
+                    RETERR(rc, "Failed to execute 'unregister' command "
+                           "for object %s", oid);
+
+                free(oid);
+                oid = NULL;
+
+            }
+        }
+        else /* i.e (postsync) */
+        {
+            if (history->entries[i].reboot_ta != NULL)
+            {
+                cfg_reboot_msg *msg = NULL;
+                char *ta = history->entries[i].reboot_ta;
+
+                if (ta == NULL)
+                    RETERR(TE_EINVAL, "Incorrect reboot command format");
+
+                if ((msg = (cfg_reboot_msg *)calloc(1, sizeof(*msg) +
+                                                    strlen(ta) + 1))
+                        == NULL)
+                    RETERR(TE_ENOMEM, "Cannot allocate memory");
+
+                msg->type = CFG_REBOOT;
+                msg->len = sizeof(*msg) + strlen(ta) + 1;
+                msg->rc = 0;
+                msg->restore = FALSE;
+                strcpy(msg->ta_name, ta);
+
+                cfg_process_msg((cfg_msg **)&msg, TRUE);
+                if (msg->rc != 0)
+                    RETERR(msg->rc, "Failed to execute the reboot command");
+
+                free(msg);
+            }
+            /* add */
+            for (j = 0; j < history->entries[i].add_count; j++)
+            {
+                rc = NEW_cfg_dh_process_add_instance(
+                                                &history->entries[i].add[j],
+                                                expand_vars);
+                if (rc != 0)
+                {
+                    ERROR("Failed to process add command");
+                    return rc;
+                }
+            }
+            /* get */
+            for (j = 0; j < history->entries[i].get_count; j++)
+            {
+                rc = NEW_cfg_dh_get_value_from_instance(
+                                                &history->entries[i].get[j],
+                                                expand_vars);
+                if (rc != 0)
+                {
+                    ERROR("Failed to process add command");
+                    return rc;
+                }
+            }
+            /* set */
+            for (j = 0; j < history->entries[i].set_count; j++)
+            {
+                cfg_set_msg *msg = NULL;
+                cfg_inst_val val;
+                cfg_handle   handle;
+                cfg_object  *obj;
+
+                rc = NEW_cfg_dh_get_instance_info(&history->entries[i].set[j],
+                                                  &handle, &oid,
+                                                  &obj, expand_vars);
+                if (rc != 0)
+                    return rc;
+
+                len = sizeof(cfg_set_msg) + CFG_MAX_INST_VALUE;
+                if ((msg = (cfg_set_msg *)calloc(1, len)) == NULL)
+                    RETERR(TE_ENOMEM, "Cannot allocate memory");
+
+                msg->handle = handle;
+                msg->type = CFG_SET;
+                msg->len = sizeof(cfg_set_msg);
+                msg->rc = 0;
+                msg->val_type = obj->type;
+
+                val_s = te_expand_vars_or_env(history->entries[i].set[j].value,
+                                              expand_vars);
+                if (val_s == NULL)
+                    RETERR(TE_EINVAL, "Value is required for %s", oid);
+
+                cfg_types[obj->type].put_to_msg(val, (cfg_msg *)msg);
+                free(val_s);
+                val_s = NULL;
+                cfg_types[obj->type].free(val);
+                cfg_process_msg((cfg_msg **)&msg, TRUE);
+
+                if (msg->rc != 0)
+                    RETERR(msg->rc, "Failed to execute the set command "
+                                    "for instance %s", oid);
+
+                free(msg);
+                msg = NULL;
+                free(oid);
+                oid = NULL;
+            }
+            /* delete */
+            for (j = 0; j < history->entries[i].delete_count; j++)
+            {
+                cfg_del_msg *msg = NULL;
+                cfg_handle   handle;
+
+                oid = te_expand_vars_or_env(history->entries[i].delete[j].oid,
+                                            expand_vars);
+                if (oid == NULL)
+                    RETERR(TE_EINVAL, "Incorrect delete command format (oid)");
+
+                if ((rc = cfg_db_find((char *)oid, &handle)) != 0)
+                    RETERR(rc, "Cannot find instance %s", oid);
+
+                if (!CFG_IS_INST(handle))
+                    RETERR(TE_EINVAL, "OID %s is not instance", oid);
+
+                if ((msg = (cfg_del_msg *)calloc(1, sizeof(*msg))) == NULL)
+                    RETERR(TE_ENOMEM, "Cannot allocate memory");
+
+                msg->type = CFG_DEL;
+                msg->len = sizeof(*msg);
+                msg->rc = 0;
+                msg->handle = handle;
+
+                cfg_process_msg((cfg_msg **)&msg, TRUE);
+                if (msg->rc != 0)
+                    RETERR(msg->rc, "Failed to execute the delete command "
+                                    "for instance %s", oid);
+
+                free(msg);
+                msg = NULL;
+                free(oid);
+                oid = NULL;
+            }
+            /* copy */
+            for (j = 0; j < history->entries[i].copy_count; j++)
+            {
+                rc = NEW_cfg_dh_process_copy_instance(
+                                                &history->entries[i].copy[j],
+                                                expand_vars);
+                if (rc != 0)
+                {
+                    ERROR("Failed to process copy command: %r", rc);
+                    return rc;
+                }
+            }
+        }
+    }
+    return 0;
 #undef RETERR
 }
 
@@ -1120,6 +1761,185 @@ cfg_dh_create_file(char *filename)
     fprintf(f, "# End of history file\n");
     fclose(f);
     return 0;
+
+#undef RETERR
+}
+
+/**
+ * Create YAML "history" configuration file with specified name.
+ *
+ * @param filename      name of the file to be created
+ *
+ * @return status code (errno.h)
+ */
+int
+NEW_cfg_dh_create_file(char *filename)
+{
+
+    cfg_dh_entry *tmp;
+
+    history_seq *history = malloc(sizeof(history_seq));
+    unsigned int i;
+    te_errno rc = 0;
+    cyaml_err_t err;
+
+    cfg_dh_optimize();
+
+#define RETERR(_err) \
+    do {                   \
+        fclose(f);         \
+        unlink(filename);  \
+        return _err;       \
+    } while (0)
+
+    history->entries_count = 0;
+    for (tmp = first; tmp != NULL; tmp = tmp->next)
+    {
+        history->entries_count++;
+    }
+    history->entries = malloc(sizeof(history_entry) *
+                              history->entries_count);
+    for (i = 0; i < history->entries_count; i++)
+    {
+        history->entries[i].reg = NULL;
+        history->entries[i].reg_count = 0;
+        history->entries[i].unreg = NULL;
+        history->entries[i].unreg_count = 0;
+        history->entries[i].add = NULL;
+        history->entries[i].add_count = 0;
+        history->entries[i].get = NULL;
+        history->entries[i].get_count = 0;
+        history->entries[i].delete = NULL;
+        history->entries[i].delete_count = 0;
+        history->entries[i].copy = NULL;
+        history->entries[i].copy_count = 0;
+        history->entries[i].set = NULL;
+        history->entries[i].set_count = 0;
+        history->entries[i].reboot_ta = NULL;
+    }
+
+    for (tmp = first, i = 0; tmp != NULL; tmp = tmp->next, i++)
+    {
+        switch (tmp->cmd->type)
+        {
+            case CFG_REGISTER:
+            {
+                cfg_register_msg *msg = (cfg_register_msg *)(tmp->cmd);
+
+                history->entries[i].reg_count = 1;
+                history->entries[i].reg = malloc(sizeof(object_type));
+
+                history->entries[i].reg[0].oid = strdup(msg->oid);
+                history->entries[i].reg[0].access = msg->access;
+                history->entries[i].reg[0].type = msg->val_type;
+                history->entries[i].reg[0].no_parent_dep = msg->no_parent_dep;
+                history->entries[i].reg[0].def_val = NULL;
+
+                if (msg->def_val != 0)
+                {
+                    history->entries[i].reg[0].def_val =
+                        strdup(msg->oid + msg->def_val);
+                }
+
+                history->entries[i].reg[0].unit = false;
+                history->entries[i].reg[0].volat = false;
+                history->entries[i].reg[0].substitution = false;
+                history->entries[i].reg[0].depends = NULL;
+                history->entries[i].reg[0].depends_count = 0;
+                break;
+            }
+
+            case CFG_ADD:
+            {
+                cfg_val_type t = ((cfg_add_msg *)(tmp->cmd))->val_type;
+
+                history->entries[i].add_count = 1;
+                history->entries[i].add = malloc(sizeof(instance_type));
+
+                history->entries[i].add[0].oid = strdup((char *)(tmp->cmd) +
+                                    ((cfg_add_msg *)(tmp->cmd))->oid_offset);
+                history->entries[i].add[0].value = NULL;
+
+                if (t != CVT_NONE)
+                {
+                    cfg_inst_val val;
+                    char *val_str = NULL;
+
+                    rc = cfg_types[t].get_from_msg(tmp->cmd, &val);
+                    if (rc != 0)
+                        goto cleanup;
+
+                    rc = cfg_types[t].val2str(val, &val_str);
+                    history->entries[i].add[0].value = strdup(val_str);
+                    cfg_types[t].free(val);
+                    free(val_str);
+                    if (rc != 0)
+                        goto cleanup;
+                }
+                break;
+            }
+
+            case CFG_SET:
+            {
+                cfg_val_type t = ((cfg_set_msg *)(tmp->cmd))->val_type;
+
+                history->entries[i].set_count = 1;
+                history->entries[i].set = malloc(sizeof(instance_type));
+
+                history->entries[i].set[0].oid = strdup(tmp->old_oid);
+                history->entries[i].set[0].value = NULL;
+
+                if (t != CVT_NONE)
+                {
+                    cfg_inst_val val;
+                    char *val_str = NULL;
+                    te_errno rc;
+
+                    rc = cfg_types[t].get_from_msg(tmp->cmd, &val);
+                    if (rc != 0)
+                        goto cleanup;
+
+                    rc = cfg_types[t].val2str(val, &val_str);
+                    history->entries[i].add[0].value = strdup(val_str);
+                    cfg_types[t].free(val);
+                    free(val_str);
+                    if (rc != 0)
+                        goto cleanup;
+                }
+                break;
+            }
+
+            case CFG_DEL:
+            {
+                history->entries[i].delete_count = 1;
+                history->entries[i].delete = malloc(sizeof(instance_type));
+
+                history->entries[i].delete[0].oid = strdup(tmp->old_oid);
+                history->entries[i].delete[0].value = NULL;
+                break;
+            }
+
+            case CFG_REBOOT:
+            {
+                history->entries[i].reboot_ta =
+                    strdup(((cfg_reboot_msg *)(tmp->cmd))->ta_name);
+                break;
+            }
+            default:
+            {
+                /* do nothing */
+            }
+        }
+    }
+    history->entries_count = i;
+
+    err = cyaml_save_file(filename, &cyaml_config,
+                          &history_schema, history, 0);
+    rc = te_process_cyaml_errors(err);
+
+cleanup:
+    cyaml_free(&cyaml_config, &history_schema, history, 0);
+    return rc;
 
 #undef RETERR
 }

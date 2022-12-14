@@ -2218,7 +2218,40 @@ parse_config_yaml(const char *filename, te_kvpair_h *expand_vars,
               filename);
         return TE_OS_RC(TE_CS, errno);
     }
+#if 1 /* MY COMMENT TEMPORARY */
+    te_string filename_temp;
+    te_string filename_temp_;
+    struct timeval tv = {0, 0};
 
+    filename_temp = (te_string)TE_STRING_INIT;
+    filename_temp_ = (te_string)TE_STRING_INIT;
+    gettimeofday(&tv, NULL);
+    te_string_append(&filename_temp, "/home/kosovnn/myWork/temp_for_XML2YAML/yml/resolved%d.yml",
+            (int)tv.tv_usec/10);
+    te_string_append(&filename_temp_, "/home/kosovnn/myWork/temp_for_XML2YAML/yml/resolved%d_.yml",
+            (int)tv.tv_usec/10);
+//    char *filename_in = (char *)filename;
+
+//    yaml_pre_parse_history(filename_in, filename_temp.ptr, expand_vars, conf_dirs);
+
+#if 1
+    history_seq *history;
+    cyaml_err_t err;
+
+//    cyaml_config.log_level = CYAML_LOG_INFO;
+
+    err = cyaml_load_file(filename_temp.ptr, &cyaml_config,
+                          &history_schema, (cyaml_data_t **) &history, NULL);
+    if (err != 0)
+        ERROR("There was a cyaml problem to load file %s", filename_temp.ptr);
+//    print_history(history);
+    err = cyaml_save_file(filename_temp_.ptr, &cyaml_config,
+                          &history_schema, history, 0);
+//    cyaml_config.log_level = CYAML_LOG_WARNING; /* Logging errors and warnings only. */
+    if (err != 0)
+        ERROR("There was a cyaml problem to save file %s", filename_temp_.ptr);
+#endif
+#endif
     yaml_parser_initialize(&parser);
     yaml_parser_set_input_file(&parser, f);
     yaml_parser_load(&parser, &dy);
@@ -2520,6 +2553,39 @@ out:
     return rc;
 }
 #endif
+
+/* See description in 'conf_yaml.h' */
+te_errno
+NEW_OLD_parse_config_yaml(const char *filename, te_kvpair_h *expand_vars,
+                      history_seq history, const char *conf_dirs)
+{
+    te_string filename_temp;
+    te_string filename_temp_;
+    struct timeval tv = {0, 0};
+    cyaml_err_t err;
+    te_errno rc = 0;
+
+    filename_temp = (te_string)TE_STRING_INIT;
+    filename_temp_ = (te_string)TE_STRING_INIT;
+    gettimeofday(&tv, NULL);
+    te_string_append(&filename_temp, "/home/kosovnn/myWork/temp_for_XML2YAML/yml/resolved%d.yml",
+            (int)tv.tv_usec/10);
+    te_string_append(&filename_temp_, "/home/kosovnn/myWork/temp_for_XML2YAML/yml/resolved%d_.yml",
+            (int)tv.tv_usec/10);
+
+//    yaml_pre_parse_history(filename, filename_temp.ptr, expand_vars, conf_dirs);
+
+    err = cyaml_load_file(filename_temp.ptr, &cyaml_config,
+                          &history_schema, (cyaml_data_t **) &history, NULL);
+    if (err != 0)
+        ERROR("There was a cyaml problem");
+//    err = cyaml_save_file(filename_temp_->ptr, &cyaml_config,
+//                          &history_schema, &history, 0);
+    rcf_log_cfg_changes(TRUE);
+    rc = NEW_parse_config_dh_sync(&history, expand_vars);
+    rcf_log_cfg_changes(FALSE);
+    return rc;
+}
 
 /**
  * Convert YAML backup file to XML structure

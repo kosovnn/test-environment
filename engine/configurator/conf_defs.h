@@ -81,4 +81,18 @@ cfg_instance_volatile(cfg_instance *inst)
 extern te_errno parse_config_dh_sync(xmlNodePtr root_node,
                                      te_kvpair_h *expand_vars);
 
+/**
+ * Process structure containing dynamic history and
+ * synchronise resulting database with Test Agents.
+ *
+ * @param history       history structure
+ * @param expand_vars   List of key-value pairs for expansion in file,
+ *                      @c NULL if environment variables are used for
+ *                      substitutions
+ *
+ * @return Status code.
+ */
+extern te_errno NEW_parse_config_dh_sync(history_seq *history,
+                                         te_kvpair_h *expand_vars);
+
 #endif /* !__TE_CONF_DEFS_H__ */

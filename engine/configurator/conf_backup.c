@@ -88,8 +88,8 @@ cfg_register_dependency(xmlNodePtr node, const char *dependant)
 
 /**
  * Parses all object dependencies in the configuration file.
- * Note: this function is NOT also used in conf_dh.c.
- *                      !!!!!!!!!!!!!!!!!!!!!
+ * Note: this function is also used in conf_dh.c.
+ *
  * @param node     first dependency node
  */
 int
