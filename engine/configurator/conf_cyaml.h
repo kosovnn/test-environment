@@ -35,6 +35,8 @@ typedef struct depends_entry {
 
 /* Structure for storing object */
 typedef struct object_type {
+    char *d; /* cyaml doesn'know about this type of field */
+
     char *oid;
     uint8_t access;
     uint8_t type; /* optional; 0 is default value means NONE type */
@@ -50,6 +52,8 @@ typedef struct object_type {
 
 /* Structure for storing instance */
 typedef struct instance_type {
+    char *if_cond; /* cyaml doesn't know about this field */
+
     char *oid;
     char *value; /* optional */
 } instance_type;
@@ -67,9 +71,23 @@ typedef struct backup_seq {
     uint entries_count;
 } backup_seq;
 
+/* Structure for storing condition */
+typedef struct cond_entry{ /* cyaml doesn't know about this structure */
+    char *if_cond;
+    struct history_seq *then_cond;
+    struct history_seq *else_cond;
+} cond_entry;
+
 /* Structure for storing entry of history.
  * The only one pointer in not equal to NULL */
 typedef struct history_entry {
+    char *comment; /* cyaml doesn't know about this field */
+
+    char **incl; /* cyaml doesn't know about this field */
+    uint incl_count;
+
+    cond_entry *cond; /* cyaml doesn't know about this field */
+
     object_type *reg; /* optional */
     uint reg_count;
 
