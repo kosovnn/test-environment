@@ -39,6 +39,36 @@
       .deps = SLIST_HEAD_INITIALIZER(deps), \
       .cond = TRUE }
 
+typedef enum cs_yaml_node_type_e {
+    CS_YAML_NODE_TYPE_COMMENT,
+    CS_YAML_NODE_TYPE_INCLUDE,
+    CS_YAML_NODE_TYPE_COND,
+    CS_YAML_NODE_TYPE_REGISTER,
+    CS_YAML_NODE_TYPE_UNREGISTER,
+    CS_YAML_NODE_TYPE_ADD,
+    CS_YAML_NODE_TYPE_GET,
+    CS_YAML_NODE_TYPE_DELETE,
+    CS_YAML_NODE_TYPE_COPY,
+    CS_YAML_NODE_TYPE_SET,
+    CS_YAML_NODE_TYPE_REBOOT,/* Should it be added? */
+} cs_yaml_node_type_t;
+
+const te_enum_map cs_yaml_node_type_mapping[] = {
+    {.name = "comment",    .value = CS_YAML_NODE_TYPE_COMMENT},
+    {.name = "include",    .value = CS_YAML_NODE_TYPE_INCLUDE},
+    {.name = "cond",       .value = CS_YAML_NODE_TYPE_COND},
+    {.name = "register",   .value = CS_YAML_NODE_TYPE_REGISTER},
+    {.name = "unregister", .value = CS_YAML_NODE_TYPE_UNREGISTER},
+    {.name = "add",        .value = CS_YAML_NODE_TYPE_ADD},
+    {.name = "get",        .value = CS_YAML_NODE_TYPE_GET},
+    {.name = "delete",     .value = CS_YAML_NODE_TYPE_DELETE},
+    {.name = "copy",       .value = CS_YAML_NODE_TYPE_COPY},
+    {.name = "set",        .value = CS_YAML_NODE_TYPE_SET},
+    {.name = "reboot_ta",  .value = CS_YAML_NODE_TYPE_REBOOT},
+    TE_ENUM_MAP_END
+};
+
+#if 1
 typedef struct parse_config_yaml_ctx {
     char            *file_path;
     yaml_document_t *doc;
@@ -46,6 +76,14 @@ typedef struct parse_config_yaml_ctx {
     te_kvpair_h     *expand_vars;
     const char      *conf_dirs;
 } parse_config_yaml_ctx;
+#endif
+#if 1
+typedef struct NEW_parse_config_yaml_ctx {
+    char            *file_path;
+    yaml_document_t *doc;
+    history_seq *history;
+} NEW_parse_config_yaml_ctx;
+#endif
 
 typedef struct config_yaml_target_s {
     const char *command_name;
@@ -152,6 +190,7 @@ out:
     return rc;
 }
 
+#if 1
 static te_errno
 parse_config_if_expr(yaml_node_t *n, te_bool *if_expr, te_kvpair_h *expand_vars)
 {
@@ -186,6 +225,35 @@ parse_config_if_expr(yaml_node_t *n, te_bool *if_expr, te_kvpair_h *expand_vars)
 
     return rc;
 }
+#endif
+
+#if 1
+static te_errno
+NEW_parse_config_str(yaml_node_t *n, char **str)
+{
+    te_errno    rc = 0;
+
+    if (n->type == YAML_SCALAR_NODE)
+    {
+        *str = strdup((char *)n->data.scalar.value);
+
+        if (n->data.scalar.length == 0)
+        {
+            ERROR(CS_YAML_ERR_PREFIX
+                  "found the scalar node to be badly formatted");
+            return TE_EINVAL;
+        }
+    }
+    else
+    {
+        ERROR(CS_YAML_ERR_PREFIX
+              "found the expected scalar node to be not a scalar node");
+        return TE_EINVAL;
+    }
+
+    return rc;
+}
+#endif
 
 typedef enum cs_yaml_node_attribute_type_e {
     CS_YAML_NODE_ATTRIBUTE_CONDITION = 0,
@@ -855,6 +923,7 @@ out:
     return rc;
 }
 
+#if 1
 /**
  * Process the sequence of target nodes for the specified
  * command in the given YAML document.
@@ -899,10 +968,68 @@ parse_config_yaml_cmd_process_targets(parse_config_yaml_ctx *ctx,
 
     return 0;
 }
+#endif
 
+#if 1
+/**
+ * Process the sequence of target nodes for the specified
+ * command in the given YAML document.
+ *
+ * @param ctx               Current doc context
+ * @param n                 Handle of the target sequence in the given YAML
+ *                          document
+ * @param xn_cmd            Handle of command node in the XML document being
+ *                          created
+ * @param cmd               String representation of command
+ *
+ * @return Status code.
+ */
+static te_errno
+NEW_parse_config_yaml_cmd_process_targets(NEW_parse_config_yaml_ctx *ctx,
+                                      yaml_node_t *n, history_entry *h_enrty,
+                                      cs_yaml_node_type_t node_type)
+{
+#if 0
+    yaml_document_t *d = ctx->doc;
+    yaml_node_item_t *item = n->data.sequence.items.start;
+
+    if (n->type != YAML_SEQUENCE_NODE)
+    {
+        ERROR(CS_YAML_ERR_PREFIX "found the %s command's list of targets "
+              "to be badly formatted", cmd);
+        return TE_EINVAL;
+    }
+
+    do {
+        yaml_node_t *in = yaml_document_get_node(d, *item);
+        te_errno     rc = 0;
+
+        rc = parse_config_yaml_cmd_process_target(ctx, in, xn_cmd, cmd);
+        if (rc != 0)
+        {
+            ERROR(CS_YAML_ERR_PREFIX "failed to process the target in the "
+                  "%s command's list at " YAML_NODE_LINE_COLUMN_FMT "",
+                  cmd, YAML_NODE_LINE_COLUMN(in));
+            return rc;
+        }
+    } while (++item < n->data.sequence.items.top);
+#endif
+
+    return 0;
+}
+#endif
+
+#if 1
 static te_errno parse_config_yaml_cmd(parse_config_yaml_ctx *ctx,
                                       yaml_node_t           *parent);
+#endif
+#if 1
+static te_errno NEW_parse_config_yaml_cmd(NEW_parse_config_yaml_ctx *ctx,
+                                          history_seq *history,
+                                          yaml_node_t           *parent);
+#endif
 
+#if 1
 /**
  * Process dynamic history specified command in the given YAML document.
  *
@@ -1042,7 +1169,169 @@ out:
 
     return rc;
 }
+#endif
 
+#if 1
+static te_errno
+NEW_parse_config_yaml_cond(NEW_parse_config_yaml_ctx *ctx,
+                                   yaml_node_t *n,
+                                   history_entry *h_entry)
+{
+    yaml_document_t *d = ctx->doc;
+    te_errno rc = 0;
+
+    h_entry->cond = TE_ALLOC(sizeof(cond_entry));
+    h_entry->cond->then_cond = TE_ALLOC(sizeof(history_seq));
+    h_entry->cond->else_cond = TE_ALLOC(sizeof(history_seq));
+    yaml_node_pair_t *pair = n->data.mapping.pairs.start;
+    do {
+        yaml_node_t *k = yaml_document_get_node(d, pair->key);
+        yaml_node_t *v = yaml_document_get_node(d, pair->value);
+        const char  *k_label = (const char *)k->data.scalar.value;
+
+        if (strcmp(k_label, "if") == 0)
+        {
+            rc = NEW_parse_config_str(v, &h_entry->cond->if_cond);
+            if (rc != 0)
+            {
+                ERROR(CS_YAML_ERR_PREFIX
+                      "found the if node in cond node to be badly formatted");
+            }
+        }
+        else if (strcmp(k_label, "then") == 0)
+        {
+            rc = NEW_parse_config_yaml_cmd(ctx,
+                                           h_entry->cond->then_cond, v);
+            if (rc != 0)
+            {
+                ERROR(CS_YAML_ERR_PREFIX
+                      "found the then node in cond node to be badly formatted");
+            }
+        }
+        else if (strcmp(k_label, "else") == 0)
+        {
+            rc = NEW_parse_config_yaml_cmd(ctx,
+                                           h_entry->cond->else_cond, v);
+            if (rc != 0)
+            {
+                ERROR(CS_YAML_ERR_PREFIX
+                      "found the else node in cond node to be badly formatted");
+            }
+        }
+        else
+        {
+            ERROR(CS_YAML_ERR_PREFIX "failed to recognise cond "
+                  "command's child");
+            rc = TE_EINVAL;
+        }
+
+        if (rc != 0)
+        {
+            ERROR(CS_YAML_ERR_PREFIX "detected some error(s) in the cond "
+                  "command's nested node at " YAML_NODE_LINE_COLUMN_FMT "",
+                  YAML_NODE_LINE_COLUMN(k));
+            return rc;
+        }
+    } while (++pair < n->data.mapping.pairs.top);
+
+    return rc;
+}
+#endif
+
+#if 1
+/**
+ * Process dynamic history specified command in the given YAML document.
+ *
+ * @param ctx               Current doc context
+ * @param n                 Handle of the command node in the given YAML document
+ * @param cmd               String representation of command
+ *
+ * @return Status code.
+ */
+static te_errno
+NEW_parse_config_yaml_specified_cmd(NEW_parse_config_yaml_ctx *ctx,
+                                    yaml_node_t *n,
+                                    history_entry *h_entry,
+                                    cs_yaml_node_type_t node_type)
+{
+    te_errno    rc = 0;
+
+    if (n->type == YAML_SEQUENCE_NODE)
+    {
+        if (node_type == CS_YAML_NODE_TYPE_COND)
+        {
+            ERROR(CS_YAML_ERR_PREFIX "found the %s command node to be "
+                  "badly formatted",
+                  te_enum_map_from_any_value(cfg_cvt_mapping, node_type,
+                                             "unknown"));
+            rc = TE_EINVAL;
+            goto out;
+        }
+#if 1
+        rc = NEW_parse_config_yaml_cmd_process_targets(ctx, n, h_entry,
+                                                       node_type);
+#endif
+        if (rc != 0)
+        {
+            ERROR(CS_YAML_ERR_PREFIX "detected some error(s) in the %s "
+                  "command's nested node at " YAML_NODE_LINE_COLUMN_FMT "",
+                  te_enum_map_from_any_value(cfg_cvt_mapping, node_type,
+                                             "unknown"),
+                  YAML_NODE_LINE_COLUMN(n));
+            goto out;
+        }
+    }
+    else if (n->type == YAML_MAPPING_NODE)
+    {
+        if (node_type != CS_YAML_NODE_TYPE_COND)
+        {
+            ERROR(CS_YAML_ERR_PREFIX "found the %s command node to be "
+                  "badly formatted",
+                  te_enum_map_from_any_value(cfg_cvt_mapping, node_type,
+                                             "unknown"));
+            rc = TE_EINVAL;
+            goto out;
+        }
+        rc = NEW_parse_config_yaml_cond(ctx, n, h_entry);
+    }
+    /*
+     * Case of single included file, e.g.
+     * - include: filename
+     */
+    else if (n->type == YAML_SCALAR_NODE)
+    {
+        if (node_type != CS_YAML_NODE_TYPE_INCLUDE)
+        {
+            ERROR(CS_YAML_ERR_PREFIX "found the %s command node to be "
+                  "badly formatted",
+                  te_enum_map_from_any_value(cfg_cvt_mapping, node_type,
+                                             "unknown"));
+            rc = TE_EINVAL;
+            goto out;
+        }
+
+        h_entry->incl_count = 1;
+        h_entry->incl = TE_ALLOC(sizeof(char *));
+        rc = NEW_parse_config_str(n, h_entry->incl);
+        if (rc != 0)
+            goto out;
+    }
+    else
+    {
+        ERROR(CS_YAML_ERR_PREFIX "found the %s command node to be "
+              "badly formatted",
+              te_enum_map_from_any_value(cfg_cvt_mapping, node_type,
+                                         "unknown"));
+        rc = TE_EINVAL;
+        goto out;
+    }
+out:
+
+    return rc;
+}
+#endif
+
+#if 1
 static te_errno
 parse_config_root_commands(parse_config_yaml_ctx *ctx,
                            yaml_node_t           *n)
@@ -1086,7 +1375,50 @@ parse_config_root_commands(parse_config_yaml_ctx *ctx,
 
     return rc;
 }
+#endif
 
+#if 1
+static te_errno
+NEW_parse_config_root_commands(NEW_parse_config_yaml_ctx *ctx,
+                               history_entry *h_entry,
+                               yaml_node_t           *n)
+{
+    yaml_document_t *d = ctx->doc;
+    yaml_node_pair_t *pair = n->data.mapping.pairs.start;
+    yaml_node_t *k = yaml_document_get_node(d, pair->key);
+    yaml_node_t *v = yaml_document_get_node(d, pair->value);
+    te_errno rc = 0;
+    cs_yaml_node_type_t node_type = te_enum_map_from_str(
+                                            cs_yaml_node_type_mapping,
+                                            (const char *)k->data.scalar.value,
+                                            -1);
+
+    if (node_type == -1)
+    {
+        ERROR(CS_YAML_ERR_PREFIX "failed to recognise the command '%s'",
+              (const char *)k->data.scalar.value);
+        rc = TE_EINVAL;
+    }
+    else
+    {
+#if 1
+         rc = NEW_parse_config_yaml_specified_cmd(ctx, v, h_entry,
+                                                  node_type);
+#endif
+    }
+
+    if (rc != 0)
+    {
+        ERROR(CS_YAML_ERR_PREFIX "detected some error(s) in "
+              "the command node at " YAML_NODE_LINE_COLUMN_FMT " in file %s",
+              YAML_NODE_LINE_COLUMN(k), ctx->file_path);
+    }
+
+    return rc;
+}
+#endif
+
+#if 1
 /**
  * Explore sequence of commands of the given parent node in the given YAML
  * document to detect and process dynamic history commands.
@@ -1128,7 +1460,69 @@ parse_config_yaml_cmd(parse_config_yaml_ctx *ctx,
 
     return rc;
 }
+#endif
 
+#if 1
+/**
+ * Explore sequence of commands of the given parent node in the given YAML
+ * document to detect and process dynamic history commands.
+ *
+ * @param ctx               Current doc context
+ * @param parent            Parent node of sequence of commands
+ *
+ * @return Status code.
+ */
+static te_errno
+NEW_parse_config_yaml_cmd(NEW_parse_config_yaml_ctx *ctx,
+                          history_seq *history,
+                          yaml_node_t           *parent)
+{
+    yaml_document_t  *d = ctx->doc;
+    yaml_node_item_t *item = NULL;
+    te_errno          rc = 0;
+
+    unsigned int i=0;
+
+    if (parent->type != YAML_SEQUENCE_NODE)
+    {
+        ERROR(CS_YAML_ERR_PREFIX "expected sequence node");
+        return TE_EFMT;
+    }
+
+    history->entries_count = 0;
+    item = parent->data.sequence.items.start;
+    do {
+    history->entries_count++;
+    } while (++item < parent->data.sequence.items.top);
+
+    if (history->entries_count > 0)
+        history->entries = TE_ALLOC(history->entries_count *
+                                  sizeof(history_entry));
+    else
+        history->entries = NULL;
+
+    item = parent->data.sequence.items.start;
+    for (i = 0; i < history->entries_count; i++)
+    {
+        yaml_node_t *n = yaml_document_get_node(d, *item);
+
+        if (n->type != YAML_MAPPING_NODE)
+        {
+            ERROR(CS_YAML_ERR_PREFIX "found the command node to be "
+                  "badly formatted");
+            rc = TE_EINVAL;
+        }
+        rc = NEW_parse_config_root_commands(ctx, &history->entries[i], n);
+        if (rc != 0)
+            break;
+        item++;
+    };
+
+    return rc;
+}
+#endif
+
+#if 1
 /* See description in 'conf_yaml.h' */
 te_errno
 parse_config_yaml(const char *filename, te_kvpair_h *expand_vars,
@@ -1227,6 +1621,97 @@ out:
 
     return rc;
 }
+#endif
+
+#if 1
+/* See description in 'conf_yaml.h' */
+te_errno
+NEW_parse_config_yaml(const char *filename, te_kvpair_h *expand_vars,
+                      history_seq *history_root, const char *conf_dirs)
+{
+    FILE                   *f = NULL;
+    yaml_parser_t           parser;
+    yaml_document_t         dy;
+    yaml_node_t            *root = NULL;
+    te_errno                rc = 0;
+    char                   *current_yaml_file_path;
+
+    NEW_parse_config_yaml_ctx ctx;
+    history_seq history = {
+        .entries = NULL,
+        .entries_count = 0
+    };
+
+    f = fopen(filename, "rb");
+    if (f == NULL)
+    {
+        ERROR(CS_YAML_ERR_PREFIX "failed to open the target file '%s'",
+              filename);
+        return TE_OS_RC(TE_CS, errno);
+    }
+
+    yaml_parser_initialize(&parser);
+    yaml_parser_set_input_file(&parser, f);
+    yaml_parser_load(&parser, &dy);
+    fclose(f);
+
+    current_yaml_file_path = strdup(filename);
+    if (current_yaml_file_path == NULL)
+    {
+        rc = TE_ENOMEM;
+        goto out;
+    }
+
+    if (history_root->entries != NULL)
+        history = *history_root;
+
+    root = yaml_document_get_root_node(&dy);
+    if (root == NULL)
+    {
+        ERROR(CS_YAML_ERR_PREFIX "failed to get the root node in file %s'",
+              filename);
+        rc = TE_EINVAL;
+        goto out;
+    }
+
+    if (root->type == YAML_SCALAR_NODE &&
+        root->data.scalar.value[0] == '\0')
+    {
+        INFO(CS_YAML_ERR_PREFIX "empty file '%s'", filename);
+        rc = 0;
+        goto out;
+    }
+
+    memset(&ctx, 0, sizeof(ctx));
+    ctx.file_path = current_yaml_file_path;
+    ctx.doc = &dy;
+    ctx.history = &history;
+    rc = NEW_parse_config_yaml_cmd(&ctx, &history, root);
+    if (rc != 0)
+    {
+        ERROR(CS_YAML_ERR_PREFIX
+              "encountered some error(s) on file '%s' processing",
+              filename);
+        goto out;
+    }
+
+    if (history_root->entries == NULL && history.entries != NULL)
+    {
+        rcf_log_cfg_changes(TRUE);
+#if 0
+        rc = NEW_parse_config_dh_sync(history, expand_vars);
+#endif
+        rcf_log_cfg_changes(FALSE);
+    }
+
+out:
+    yaml_document_delete(&dy);
+    yaml_parser_delete(&parser);
+    free(current_yaml_file_path);
+
+    return rc;
+}
+#endif
 
 /**
  * Convert YAML backup file to XML structure
