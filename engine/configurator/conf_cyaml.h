@@ -156,8 +156,8 @@ static const cyaml_strval_t type_strings[] = {
 
 /* Mapping from instance or object strings to enum values for schema. */
 static const cyaml_strval_t no_parent_dep_strings[] = {
-        {"yes", false}, /* it is a default value */
-        {"no",  true},
+        {"yes", FALSE}, /* it is a default value */
+        {"no",  TRUE},
 };
 
 /* The depends mapping's field definitions schema is an array.
