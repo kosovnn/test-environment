@@ -68,6 +68,74 @@ const te_enum_map cs_yaml_node_type_mapping[] = {
     TE_ENUM_MAP_END
 };
 
+typedef enum cs_yaml_instance_field {
+    CS_YAML_INSTANCE_IF_COND,
+    CS_YAML_INSTANCE_OID,
+    CS_YAML_INSTANCE_VALUE,
+} cs_yaml_instance_field;
+
+const te_enum_map cs_yaml_instance_fields_mapping[] = {
+    {.name = "if",      .value = CS_YAML_INSTANCE_IF_COND},
+    {.name = "oid",     .value = CS_YAML_INSTANCE_OID},
+    {.name = "value",   .value = CS_YAML_INSTANCE_VALUE},
+    TE_ENUM_MAP_END
+};
+
+typedef enum cs_yaml_object_field {
+    CS_YAML_OBJECT_D,
+    CS_YAML_OBJECT_OID,
+    CS_YAML_OBJECT_TYPE,
+    CS_YAML_OBJECT_UNIT,
+    CS_YAML_OBJECT_DEF_VAL,
+    CS_YAML_OBJECT_VOLAT,
+    CS_YAML_OBJECT_SUBSTITUTION,
+    CS_YAML_OBJECT_NO_PARENT_DEP,
+    CS_YAML_OBJECT_DEPENDS,
+} cs_yaml_object_field;
+
+const te_enum_map cs_yaml_object_fields_mapping[] = {
+    {.name = "d",             .value = CS_YAML_OBJECT_D},
+    {.name = "oid",           .value = CS_YAML_OBJECT_OID},
+    {.name = "type",          .value = CS_YAML_OBJECT_TYPE},
+    {.name = "unit",          .value = CS_YAML_OBJECT_UNIT},
+    {.name = "default",       .value = CS_YAML_OBJECT_DEF_VAL},
+    {.name = "volatile",      .value = CS_YAML_OBJECT_VOLAT},
+    {.name = "substitution",  .value = CS_YAML_OBJECT_SUBSTITUTION},
+    {.name = "parent_dep",    .value = CS_YAML_OBJECT_NO_PARENT_DEP},
+    {.name = "depends",       .value = CS_YAML_OBJECT_DEPENDS},
+    TE_ENUM_MAP_END
+};
+
+const te_enum_map cs_yaml_object_access_fields_mapping[] = {
+    {.name = "read_write",    .value = CFG_READ_WRITE},
+    {.name = "read_only",     .value = CFG_READ_ONLY},
+    {.name = "read_create",   .value = CFG_READ_CREATE},
+    TE_ENUM_MAP_END
+};
+
+const te_enum_map cs_yaml_object_no_parent_dep_mapping[] = {
+    {.name = "yes",     .value = FALSE},
+    {.name = "no",      .value = TRUE},
+    TE_ENUM_MAP_END
+};
+
+typedef enum cs_yaml_object_depends_field {
+    CS_YAML_OBJECT_DEPENDS_OID,
+    CS_YAML_OBJECT_DEPENDS_SCOPE,
+} cs_yaml_object_depends_field;
+
+const te_enum_map cs_yaml_object_depends_fields_mapping[] = {
+    {.name = "oid",    .value = CS_YAML_OBJECT_DEPENDS_OID},
+    {.name = "scope",  .value = CS_YAML_OBJECT_DEPENDS_SCOPE},
+    TE_ENUM_MAP_END
+};
+
+const te_enum_map cs_yaml_object_depends_scope_mapping[] = {
+    {.name = "object",        .value = TRUE},
+    {.name = "instance",      .value = FALSE},
+    TE_ENUM_MAP_END
+};
+
 #if 1
 typedef struct parse_config_yaml_ctx {
     char            *file_path;
@@ -231,7 +299,7 @@ parse_config_if_expr(yaml_node_t *n, te_bool *if_expr, te_kvpair_h *expand_vars)
 static te_errno
 NEW_parse_config_str(yaml_node_t *n, char **str)
 {
-    te_errno    rc = 0;
+    te_errno rc = 0;
 
     if (n->type == YAML_SCALAR_NODE)
     {
@@ -248,6 +316,180 @@ NEW_parse_config_str(yaml_node_t *n, char **str)
     {
         ERROR(CS_YAML_ERR_PREFIX
               "found the expected scalar node to be not a scalar node");
+        return TE_EINVAL;
+    }
+
+    return rc;
+}
+#endif
+
+#if 1
+static te_errno
+NEW_parse_config_str_by_mapping(yaml_node_t *n, uint8_t *num,
+                                const te_enum_map mapping[])
+{
+    te_errno rc = 0;
+    char *str = NULL;
+    int i;
+
+    rc = NEW_parse_config_str(n, &str);
+    if (rc == 0)
+    {
+        i = te_enum_map_from_str(mapping, str, -1);
+        if (i == -1)
+            rc = TE_EINVAL;
+        else
+            *num = i;
+    }
+    free(str);
+    return rc;
+}
+#endif
+
+#if 1
+static te_errno
+NEW_parse_config_inst(NEW_parse_config_yaml_ctx *ctx,
+                      yaml_node_t *n, instance_type *inst)
+{
+    yaml_document_t *d = ctx->doc;
+    te_errno rc = 0;
+
+    if (n->type == YAML_MAPPING_NODE)
+    {
+        yaml_node_pair_t *pair = n->data.mapping.pairs.start;
+
+        do {
+            yaml_node_t *k = yaml_document_get_node(d, pair->key);
+            yaml_node_t *v = yaml_document_get_node(d, pair->value);
+            int inst_field_name;
+
+            if (k->type != YAML_SCALAR_NODE || k->data.scalar.length == 0 ||
+                (v->type != YAML_SCALAR_NODE))
+            {
+                ERROR(CS_YAML_ERR_PREFIX "found the target attribute node to be "
+                      "badly formatted");
+                return TE_EINVAL;
+            }
+            inst_field_name = te_enum_map_from_str(
+                                            cs_yaml_instance_fields_mapping,
+                                            (const char *)k->data.scalar.value,
+                                            -1);
+
+            switch (inst_field_name)
+            {
+                case CS_YAML_INSTANCE_IF_COND:
+                    rc = NEW_parse_config_str(v, &inst->if_cond);
+                    break;
+
+                case CS_YAML_INSTANCE_OID:
+                    rc = NEW_parse_config_str(v, &inst->oid);
+                    break;
+
+                case CS_YAML_INSTANCE_VALUE:
+                    rc = NEW_parse_config_str(v, &inst->value);
+                    break;
+
+                default:
+                    ERROR(CS_YAML_ERR_PREFIX "failed to recognise the command '%s'",
+                          (const char *)k->data.scalar.value);
+                    rc = TE_EINVAL;
+            }
+            if (rc != 0)
+            {
+                ERROR(CS_YAML_ERR_PREFIX "failed to process %s"
+                      "attribute at " YAML_NODE_LINE_COLUMN_FMT "",
+                      (const char *)k->data.scalar.value,
+                      YAML_NODE_LINE_COLUMN(k));
+                return rc;
+            }
+        } while (++pair < n->data.mapping.pairs.top);
+    }
+    else
+    {
+        ERROR(CS_YAML_ERR_PREFIX
+              "found the instance node to be not a mapping node");
+        return TE_EINVAL;
+    }
+    if (inst->oid == NULL)
+    {
+        ERROR(CS_YAML_ERR_PREFIX
+              "found the oid field is absent in instance node");
+        return TE_EINVAL;
+    }
+
+    return rc;
+}
+#endif
+
+#if 1
+static te_errno
+NEW_parse_config_obj(NEW_parse_config_yaml_ctx *ctx,
+                      yaml_node_t *n, object_type *obj)
+{
+    yaml_document_t *d = ctx->doc;
+    te_errno rc = 0;
+
+    if (n->type == YAML_MAPPING_NODE)
+    {
+        yaml_node_pair_t *pair = n->data.mapping.pairs.start;
+
+        do {
+            yaml_node_t *k = yaml_document_get_node(d, pair->key);
+            yaml_node_t *v = yaml_document_get_node(d, pair->value);
+            int obj_field_name;
+
+            if (k->type != YAML_SCALAR_NODE || k->data.scalar.length == 0 ||
+                (v->type != YAML_SCALAR_NODE && v->type != YAML_SEQUENCE_NODE))
+            {
+                ERROR(CS_YAML_ERR_PREFIX "found the target attribute node to be "
+                      "badly formatted");
+                return TE_EINVAL;
+            }
+            obj_field_name = te_enum_map_from_str(
+                                            cs_yaml_object_fields_mapping,
+                                            (const char *)k->data.scalar.value,
+                                            -1);
+
+            switch (obj_field_name)
+            {
+                case CS_YAML_OBJECT_D:
+                    rc = NEW_parse_config_str(v, &obj->d);
+                    break;
+
+                case CS_YAML_OBJECT_OID:
+                    rc = NEW_parse_config_str(v, &obj->oid);
+                    break;
+
+                case CS_YAML_OBJECT_TYPE:
+                    rc = NEW_parse_config_str_by_mapping(v, &obj->type,
+                                                         cfg_cvt_mapping);
+                    break;
+
+                default:
+                    ERROR(CS_YAML_ERR_PREFIX "failed to recognise the command '%s'",
+                          (const char *)k->data.scalar.value);
+                    rc = TE_EINVAL;
+            }
+            if (rc != 0)
+            {
+                ERROR(CS_YAML_ERR_PREFIX "failed to process %s"
+                      "attribute at " YAML_NODE_LINE_COLUMN_FMT "",
+                      (const char *)k->data.scalar.value,
+                      YAML_NODE_LINE_COLUMN(k));
+                return rc;
+            }
+        } while (++pair < n->data.mapping.pairs.top);
+    }
+    else
+    {
+        ERROR(CS_YAML_ERR_PREFIX
+              "found the instance node to be not a mapping node");
+        return TE_EINVAL;
+    }
+    if (obj->oid == NULL)
+    {
+        ERROR(CS_YAML_ERR_PREFIX
+              "found the oid field is absent in instance node");
         return TE_EINVAL;
     }
 
@@ -822,6 +1064,7 @@ cytc_cleanup(cs_yaml_target_context_t *c)
     }
 }
 
+#if 1
 /**
  * Process the given target node in the given YAML document.
  *
@@ -922,6 +1165,116 @@ out:
 
     return rc;
 }
+#endif
+
+#if 1
+/**
+ * Process the given target node in the given YAML document.
+ *
+ * @param ctx               Current doc context
+ * @param n                 Handle of the target node in the given YAML document
+ * @param xn_cmd            Handle of command node in the XML document being
+ *                          created
+ * @param cmd               String representation of command
+ *
+ * @return Status code.
+ */
+static te_errno
+NEW_parse_config_yaml_cmd_process_target(NEW_parse_config_yaml_ctx *ctx,
+                                      yaml_node_t *n, history_entry *h_entry,
+                                      cs_yaml_node_type_t node_type,
+                                      unsigned int i)
+{
+//    yaml_document_t            *d = ctx->doc;
+//    te_kvpair_h                *expand_vars = ctx->expand_vars;
+//    xmlNodePtr                  xn_target = NULL;
+//    cs_yaml_target_context_t    c = YAML_TARGET_CONTEXT_INIT;
+//    const char                 *target;
+    te_errno                    rc = 0;
+
+    /*
+     * Case of several included files, e.g.
+     * - include:
+     *      - filename1
+     *      ...
+     *      - filenameN
+     */
+    if (node_type == CS_YAML_NODE_TYPE_INCLUDE)
+    {
+        rc = NEW_parse_config_str(n, &h_entry->incl[i]);
+        goto out;
+    }
+
+#if 0
+    target = get_yaml_cmd_target(cmd);
+    if (target == NULL)
+        return TE_EINVAL;
+
+    xn_target = xmlNewNode(NULL, BAD_CAST target);
+    if (xn_target == NULL)
+    {
+        ERROR(CS_YAML_ERR_PREFIX "failed to allocate %s"
+              "node for XML output", target);
+        return TE_ENOMEM;
+    }
+
+    if (n->type == YAML_SCALAR_NODE)
+    {
+        if (n->data.scalar.length == 0)
+        {
+            ERROR(CS_YAML_ERR_PREFIX "found the %s node to be "
+                  "badly formatted", target);
+            rc = TE_EINVAL;
+            goto out;
+        }
+
+        c.oid = (const xmlChar *)n->data.scalar.value;
+    }
+    else if (n->type == YAML_MAPPING_NODE)
+    {
+        yaml_node_pair_t *pair = n->data.mapping.pairs.start;
+
+        do {
+            yaml_node_t *k = yaml_document_get_node(d, pair->key);
+            yaml_node_t *v = yaml_document_get_node(d, pair->value);
+
+            rc = parse_config_yaml_cmd_add_target_attribute(d, k, v, &c,
+                                                            expand_vars);
+            if (rc != 0)
+            {
+                ERROR(CS_YAML_ERR_PREFIX "failed to process %s"
+                      "attribute at " YAML_NODE_LINE_COLUMN_FMT "",
+                      target, YAML_NODE_LINE_COLUMN(k));
+                goto out;
+            }
+        } while (++pair < n->data.mapping.pairs.top);
+    }
+    else
+    {
+        ERROR(CS_YAML_ERR_PREFIX "found the %s node to be "
+              "badly formatted", target);
+        rc = TE_EINVAL;
+        goto out;
+    }
+
+    rc = embed_yaml_target_in_xml(xn_cmd, xn_target, &c);
+    if (rc != 0)
+        goto out;
+
+    cytc_cleanup(&c);
+
+    return 0;
+#endif
+
+out:
+#if 0
+    xmlFreeNode(xn_target);
+    cytc_cleanup(&c);
+
+#endif
+    return rc;
+}
+#endif
 
 #if 1
 /**
@@ -986,34 +1339,98 @@ parse_config_yaml_cmd_process_targets(parse_config_yaml_ctx *ctx,
  */
 static te_errno
 NEW_parse_config_yaml_cmd_process_targets(NEW_parse_config_yaml_ctx *ctx,
-                                      yaml_node_t *n, history_entry *h_enrty,
+                                      yaml_node_t *n, history_entry *h_entry,
                                       cs_yaml_node_type_t node_type)
 {
-#if 0
     yaml_document_t *d = ctx->doc;
     yaml_node_item_t *item = n->data.sequence.items.start;
+    unsigned int count = 0;
+    unsigned int i = 0;
 
     if (n->type != YAML_SEQUENCE_NODE)
     {
         ERROR(CS_YAML_ERR_PREFIX "found the %s command's list of targets "
-              "to be badly formatted", cmd);
+              "to be badly formatted",
+              te_enum_map_from_any_value(cfg_cvt_mapping, node_type,
+                                         "unknown"));
         return TE_EINVAL;
     }
+    do {
+        count++;
+    } while (++item < n->data.sequence.items.top);
+/* should I deal with with count = 0 also? */
+    switch (node_type)
+    {
 
+#define CASE_INITIATE(enum_part_, struct_part_, type_) \
+        case CS_YAML_NODE_TYPE_ ## enum_part_:                          \
+            h_entry-> struct_part_ ## _count = count;                   \
+            h_entry-> struct_part_ = TE_ALLOC(count * sizeof(type_));   \
+            break
+
+        CASE_INITIATE(INCLUDE, incl, char *);
+        CASE_INITIATE(REGISTER, reg, object_type);
+        CASE_INITIATE(UNREGISTER, unreg, object_type);
+        CASE_INITIATE(ADD, add, instance_type);
+        CASE_INITIATE(GET, get, instance_type);
+        CASE_INITIATE(DELETE, delete, instance_type);
+        CASE_INITIATE(COPY, copy, instance_type);
+        CASE_INITIATE(SET, set, instance_type);
+
+#undef CASE_INITIATE
+
+        default:
+           assert(0);
+    }
+
+    item = n->data.sequence.items.start;
     do {
         yaml_node_t *in = yaml_document_get_node(d, *item);
         te_errno     rc = 0;
 
-        rc = parse_config_yaml_cmd_process_target(ctx, in, xn_cmd, cmd);
+        /*
+         * Calling NEW_parse_config_str(),
+         * NEW_parse_config_obj(),
+         * NEW_parse_config_inst().
+         */
+        switch (node_type)
+        {
+
+#define CASE_PARSE(enum_part_, struct_part_, target_) \
+            case CS_YAML_NODE_TYPE_ ## enum_part_:                             \
+                rc = NEW_parse_config_ ## target_(ctx, in,                     \
+                                                  &h_entry-> struct_part_[i]); \
+                break
+
+            case CS_YAML_NODE_TYPE_INCLUDE:
+                rc = NEW_parse_config_str(in, &h_entry->incl[i]);
+                break;
+#if 0
+            CASE_PARSE(REGISTER, reg, obj);
+            CASE_PARSE(UNREGISTER, unreg, obj);
+#endif
+            CASE_PARSE(ADD, add, inst);
+            CASE_PARSE(GET, get, inst);
+            CASE_PARSE(DELETE, delete, inst);
+            CASE_PARSE(COPY, copy, inst);
+            CASE_PARSE(SET, set, inst);
+
+#undef CASE_PARSE
+
+            default:
+               assert(0);
+        }
         if (rc != 0)
         {
             ERROR(CS_YAML_ERR_PREFIX "failed to process the target in the "
                   "%s command's list at " YAML_NODE_LINE_COLUMN_FMT "",
-                  cmd, YAML_NODE_LINE_COLUMN(in));
+                  te_enum_map_from_any_value(cfg_cvt_mapping, node_type,
+                                             "unknown"),
+                  YAML_NODE_LINE_COLUMN(in));
             return rc;
         }
+        i++;
     } while (++item < n->data.sequence.items.top);
-#endif
 
     return 0;
 }
@@ -1181,8 +1598,6 @@ NEW_parse_config_yaml_cond(NEW_parse_config_yaml_ctx *ctx,
     te_errno rc = 0;
 
     h_entry->cond = TE_ALLOC(sizeof(cond_entry));
-    h_entry->cond->then_cond = TE_ALLOC(sizeof(history_seq));
-    h_entry->cond->else_cond = TE_ALLOC(sizeof(history_seq));
     yaml_node_pair_t *pair = n->data.mapping.pairs.start;
     do {
         yaml_node_t *k = yaml_document_get_node(d, pair->key);
@@ -1200,6 +1615,7 @@ NEW_parse_config_yaml_cond(NEW_parse_config_yaml_ctx *ctx,
         }
         else if (strcmp(k_label, "then") == 0)
         {
+            h_entry->cond->then_cond = TE_ALLOC(sizeof(history_seq));
             rc = NEW_parse_config_yaml_cmd(ctx,
                                            h_entry->cond->then_cond, v);
             if (rc != 0)
@@ -1210,6 +1626,7 @@ NEW_parse_config_yaml_cond(NEW_parse_config_yaml_ctx *ctx,
         }
         else if (strcmp(k_label, "else") == 0)
         {
+            h_entry->cond->else_cond = TE_ALLOC(sizeof(history_seq));
             rc = NEW_parse_config_yaml_cmd(ctx,
                                            h_entry->cond->else_cond, v);
             if (rc != 0)
@@ -1258,19 +1675,15 @@ NEW_parse_config_yaml_specified_cmd(NEW_parse_config_yaml_ctx *ctx,
 
     if (n->type == YAML_SEQUENCE_NODE)
     {
-        if (node_type == CS_YAML_NODE_TYPE_COND)
+        if (node_type == CS_YAML_NODE_TYPE_COMMENT ||
+            node_type == CS_YAML_NODE_TYPE_COND ||
+            node_type == CS_YAML_NODE_TYPE_REBOOT)
         {
-            ERROR(CS_YAML_ERR_PREFIX "found the %s command node to be "
-                  "badly formatted",
-                  te_enum_map_from_any_value(cfg_cvt_mapping, node_type,
-                                             "unknown"));
             rc = TE_EINVAL;
             goto out;
         }
-#if 1
         rc = NEW_parse_config_yaml_cmd_process_targets(ctx, n, h_entry,
                                                        node_type);
-#endif
         if (rc != 0)
         {
             ERROR(CS_YAML_ERR_PREFIX "detected some error(s) in the %s "
@@ -1285,47 +1698,57 @@ NEW_parse_config_yaml_specified_cmd(NEW_parse_config_yaml_ctx *ctx,
     {
         if (node_type != CS_YAML_NODE_TYPE_COND)
         {
-            ERROR(CS_YAML_ERR_PREFIX "found the %s command node to be "
-                  "badly formatted",
-                  te_enum_map_from_any_value(cfg_cvt_mapping, node_type,
-                                             "unknown"));
             rc = TE_EINVAL;
             goto out;
         }
         rc = NEW_parse_config_yaml_cond(ctx, n, h_entry);
     }
-    /*
-     * Case of single included file, e.g.
-     * - include: filename
-     */
     else if (n->type == YAML_SCALAR_NODE)
     {
-        if (node_type != CS_YAML_NODE_TYPE_INCLUDE)
+        switch (node_type)
         {
-            ERROR(CS_YAML_ERR_PREFIX "found the %s command node to be "
-                  "badly formatted",
-                  te_enum_map_from_any_value(cfg_cvt_mapping, node_type,
-                                             "unknown"));
-            rc = TE_EINVAL;
-            goto out;
-        }
+            /*
+             * Case of single included file, e.g.
+             * - include: filename
+             */
+            case CS_YAML_NODE_TYPE_INCLUDE:
+                h_entry->incl_count = 1;
+                h_entry->incl = TE_ALLOC(sizeof(char *));
+                rc = NEW_parse_config_str(n, h_entry->incl);
+                if (rc != 0)
+                    goto out;
+                break;
 
-        h_entry->incl_count = 1;
-        h_entry->incl = TE_ALLOC(sizeof(char *));
-        rc = NEW_parse_config_str(n, h_entry->incl);
-        if (rc != 0)
-            goto out;
+            case CS_YAML_NODE_TYPE_COMMENT:
+                rc = NEW_parse_config_str(n, &h_entry->comment);
+                if (rc != 0)
+                    goto out;
+                break;
+
+            case CS_YAML_NODE_TYPE_REBOOT:
+                rc = NEW_parse_config_str(n, &h_entry->reboot_ta);
+                if (rc != 0)
+                    goto out;
+                break;
+
+            default:
+                rc = TE_EINVAL;
+                goto out;
+        }
     }
     else
+    {
+        rc = TE_EINVAL;
+        goto out;
+    }
+out:
+    if (rc != 0)
     {
         ERROR(CS_YAML_ERR_PREFIX "found the %s command node to be "
               "badly formatted",
               te_enum_map_from_any_value(cfg_cvt_mapping, node_type,
                                          "unknown"));
-        rc = TE_EINVAL;
-        goto out;
     }
-out:
 
     return rc;
 }
@@ -1388,7 +1811,7 @@ NEW_parse_config_root_commands(NEW_parse_config_yaml_ctx *ctx,
     yaml_node_t *k = yaml_document_get_node(d, pair->key);
     yaml_node_t *v = yaml_document_get_node(d, pair->value);
     te_errno rc = 0;
-    cs_yaml_node_type_t node_type = te_enum_map_from_str(
+    int node_type = te_enum_map_from_str(
                                             cs_yaml_node_type_mapping,
                                             (const char *)k->data.scalar.value,
                                             -1);
@@ -1401,10 +1824,8 @@ NEW_parse_config_root_commands(NEW_parse_config_yaml_ctx *ctx,
     }
     else
     {
-#if 1
          rc = NEW_parse_config_yaml_specified_cmd(ctx, v, h_entry,
                                                   node_type);
-#endif
     }
 
     if (rc != 0)
