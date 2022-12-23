@@ -84,6 +84,7 @@ const te_enum_map cs_yaml_instance_fields_mapping[] = {
 typedef enum cs_yaml_object_field {
     CS_YAML_OBJECT_D,
     CS_YAML_OBJECT_OID,
+    CS_YAML_OBJECT_ACCESS,
     CS_YAML_OBJECT_TYPE,
     CS_YAML_OBJECT_UNIT,
     CS_YAML_OBJECT_DEF_VAL,
@@ -96,6 +97,7 @@ typedef enum cs_yaml_object_field {
 const te_enum_map cs_yaml_object_fields_mapping[] = {
     {.name = "d",             .value = CS_YAML_OBJECT_D},
     {.name = "oid",           .value = CS_YAML_OBJECT_OID},
+    {.name = "access",        .value = CS_YAML_OBJECT_ACCESS},
     {.name = "type",          .value = CS_YAML_OBJECT_TYPE},
     {.name = "unit",          .value = CS_YAML_OBJECT_UNIT},
     {.name = "default",       .value = CS_YAML_OBJECT_DEF_VAL},
@@ -110,6 +112,12 @@ const te_enum_map cs_yaml_object_access_fields_mapping[] = {
     {.name = "read_write",    .value = CFG_READ_WRITE},
     {.name = "read_only",     .value = CFG_READ_ONLY},
     {.name = "read_create",   .value = CFG_READ_CREATE},
+    TE_ENUM_MAP_END
+};
+
+const te_enum_map cs_yaml_bool_mapping[] = {
+    {.name = "false",     .value = FALSE},
+    {.name = "true",      .value = TRUE},
     TE_ENUM_MAP_END
 };
 
@@ -437,6 +445,7 @@ NEW_parse_config_obj(NEW_parse_config_yaml_ctx *ctx,
             yaml_node_t *k = yaml_document_get_node(d, pair->key);
             yaml_node_t *v = yaml_document_get_node(d, pair->value);
             int obj_field_name;
+            uint8_t temp;
 
             if (k->type != YAML_SCALAR_NODE || k->data.scalar.length == 0 ||
                 (v->type != YAML_SCALAR_NODE && v->type != YAML_SEQUENCE_NODE))
@@ -460,9 +469,50 @@ NEW_parse_config_obj(NEW_parse_config_yaml_ctx *ctx,
                     rc = NEW_parse_config_str(v, &obj->oid);
                     break;
 
+                case CS_YAML_OBJECT_ACCESS:
+                    rc = NEW_parse_config_str_by_mapping(v, &obj->access,
+                                        cs_yaml_object_access_fields_mapping);
+                    break;
+
                 case CS_YAML_OBJECT_TYPE:
                     rc = NEW_parse_config_str_by_mapping(v, &obj->type,
                                                          cfg_cvt_mapping);
+                    if (rc ==0 && obj->type == CVT_UNSPECIFIED)
+                        rc = TE_EINVAL;
+                    break;
+
+                case CS_YAML_OBJECT_UNIT:
+                    rc = NEW_parse_config_str_by_mapping(v, &temp,
+                                                         cs_yaml_bool_mapping);
+                    obj->unit = temp;
+                    break;
+
+                case CS_YAML_OBJECT_DEF_VAL:
+                    rc = NEW_parse_config_str(v, &obj->def_val);
+                    break;
+
+                case CS_YAML_OBJECT_VOLAT:
+                    rc = NEW_parse_config_str_by_mapping(v, &temp,
+                                                         cs_yaml_bool_mapping);
+                    obj->volat = temp;
+                    break;
+
+                case CS_YAML_OBJECT_SUBSTITUTION:
+                    rc = NEW_parse_config_str_by_mapping(v, &temp,
+                                                         cs_yaml_bool_mapping);
+                    obj->substitution = temp;
+                    break;
+
+                case CS_YAML_OBJECT_NO_PARENT_DEP:
+                    rc = NEW_parse_config_str_by_mapping(v, &temp,
+                                          cs_yaml_object_no_parent_dep_mapping);
+                    obj->type = temp;
+                    break;
+
+                case CS_YAML_OBJECT_DEPENDS:
+#if 0
+                    rc = NEW_parse_config_depends(v, &obj);
+#endif
                     break;
 
                 default:
