@@ -171,6 +171,8 @@ typedef struct NEW_parse_config_yaml_ctx {
     char            *file_path;
     yaml_document_t *doc;
     history_seq *history;
+    te_kvpair_h *expand_vars;
+    const char *conf_dirs;
 } NEW_parse_config_yaml_ctx;
 #endif
 
@@ -1891,48 +1893,6 @@ NEW_parse_config_yaml_cond(NEW_parse_config_yaml_ctx *ctx,
                       (const char *)k->data.scalar.value);
                 rc = TE_EINVAL;
         }
-#if 0
-        const char  *k_label = (const char *)k->data.scalar.value;
-
-//SHOULD BE SWITCHED TO AS USUAL
-        if (strcmp(k_label, "if") == 0)
-        {
-            rc = NEW_parse_config_str(v, &h_entry->cond->if_cond);
-            if (rc != 0)
-            {
-                ERROR(CS_YAML_ERR_PREFIX
-                      "found the if node in cond node to be badly formatted");
-            }
-        }
-        else if (strcmp(k_label, "then") == 0)
-        {
-            h_entry->cond->then_cond = TE_ALLOC(sizeof(history_seq));
-            rc = NEW_parse_config_root_seq(ctx,
-                                           h_entry->cond->then_cond, v);
-            if (rc != 0)
-            {
-                ERROR(CS_YAML_ERR_PREFIX
-                      "found the then node in cond node to be badly formatted");
-            }
-        }
-        else if (strcmp(k_label, "else") == 0)
-        {
-            h_entry->cond->else_cond = TE_ALLOC(sizeof(history_seq));
-            rc = NEW_parse_config_root_seq(ctx,
-                                           h_entry->cond->else_cond, v);
-            if (rc != 0)
-            {
-                ERROR(CS_YAML_ERR_PREFIX
-                      "found the else node in cond node to be badly formatted");
-            }
-        }
-        else
-        {
-            ERROR(CS_YAML_ERR_PREFIX "failed to recognise cond "
-                  "command's child");
-            rc = TE_EINVAL;
-        }
-#endif
 
         if (rc != 0)
         {
@@ -2338,10 +2298,105 @@ out:
 #endif
 
 #if 1
+static te_errno
+NEW_reparse_if_cond_seq(NEW_parse_config_yaml_ctx *ctx,
+                        instance_type *a_inst,
+                        int *count)
+{
+    te_errno rc = 0;
+    unsigned int i = 0;
+    unsigned int j = 0;
+    te_bool if_expr;
+
+    for (i = 0; i < *count; i++)
+    {
+        if (a_inst[i].if_cond != NULL)
+        {
+            rc = parse_logic_expr_str(a_inst[i].if_cond, &if_expr,
+                                      ctx->expand_vars);
+            if (rc != 0)
+            {
+                ERROR(CS_YAML_ERR_PREFIX "failed to evaluate the expression "
+                      "contained in the condition node");
+                return rc;
+            }
+            if (!if_expr)
+            {
+#if 0 /*Should be written */
+                free_inst(a_inst[i]);
+#endif
+            }
+            else
+            {
+                free(a_inst[i].if_cond);
+                a_inst[i].if_cond = NULL;
+            }
+        }
+        else
+        {
+            if_expr = TRUE;
+        }
+        a_inst[j] = a_inst[i];
+        if (if_expr)
+            j++;
+    }
+    *count =j;
+
+    return rc;
+}
+#endif
+
+#if 1
+static te_errno
+NEW_reparse_config_root_seq(NEW_parse_config_yaml_ctx *ctx,
+                            history_seq *history)
+{
+    te_errno rc = 0;
+    unsigned int i;
+
+#define PROCESS_INSTANCE_IF_COND(cmd_) \
+        else if (history->entries[i]. cmd_ != NULL)                        \
+        {                                                                  \
+            rc = NEW_reparse_if_cond_seq(ctx, history->entries[i]. cmd_ ,  \
+                                    &history->entries[i]. cmd_ ## _count); \
+            if (rc != 0)                                                   \
+            {                                                              \
+                ERROR("");                                                 \
+            }                                                              \
+        }
+
+    for (i = 0; i< history->entries_count; i++)
+    {
+        if (history->entries[i].comment != NULL)
+        {
+            free(history->entries[i].comment);
+            history->entries[i].comment = NULL;
+        }
+        else if (history->entries[i].incl != NULL)
+        {
+#if 0 /*Should be written */
+            rc = NEW_reparse_include(ctx, history, i);
+#endif
+        }
+        else if (history->entries[i].cond != NULL)
+        {
+#if 0 /*Should be written */
+            rc = NEW_reparse_cond(ctx, history, i);
+#endif
+        }
+
+    }
+
+#undef CHECK_INSTANCE_IF_COND
+
+    return rc;
+}
+#endif
+
+#if 1
 /* See description in 'conf_yaml.h' */
-te_errno
-NEW_parse_config_yaml(const char *filename, te_kvpair_h *expand_vars,
-                      history_seq *history_root, const char *conf_dirs)
+static te_errno
+NEW_parse_config_yaml_file_to_seq(NEW_parse_config_yaml_ctx *ctx)
 {
     FILE                   *f = NULL;
     yaml_parser_t           parser;
@@ -2349,12 +2404,8 @@ NEW_parse_config_yaml(const char *filename, te_kvpair_h *expand_vars,
     yaml_node_t            *root = NULL;
     te_errno                rc = 0;
     char                   *current_yaml_file_path;
-
-    NEW_parse_config_yaml_ctx ctx;
-    history_seq history = {
-        .entries = NULL,
-        .entries_count = 0
-    };
+    const char *filename = ctx->file_path;
+    history_seq *history = ctx->history;
 
     f = fopen(filename, "rb");
     if (f == NULL)
@@ -2376,9 +2427,6 @@ NEW_parse_config_yaml(const char *filename, te_kvpair_h *expand_vars,
         goto out;
     }
 
-    if (history_root->entries != NULL)
-        history = *history_root;
-
     root = yaml_document_get_root_node(&dy);
     if (root == NULL)
     {
@@ -2396,11 +2444,9 @@ NEW_parse_config_yaml(const char *filename, te_kvpair_h *expand_vars,
         goto out;
     }
 
-    memset(&ctx, 0, sizeof(ctx));
-    ctx.file_path = current_yaml_file_path;
-    ctx.doc = &dy;
-    ctx.history = &history;
-    rc = NEW_parse_config_root_seq(&ctx, &history, root);
+    ctx->doc = &dy;
+
+    rc = NEW_parse_config_root_seq(ctx, history, root);
     if (rc != 0)
     {
         ERROR(CS_YAML_ERR_PREFIX
@@ -2409,18 +2455,66 @@ NEW_parse_config_yaml(const char *filename, te_kvpair_h *expand_vars,
         goto out;
     }
 
-    if (history_root->entries == NULL && history.entries != NULL)
-    {
-        rcf_log_cfg_changes(TRUE);
-#if 0
-        rc = NEW_parse_config_dh_sync(history, expand_vars);
-#endif
-        rcf_log_cfg_changes(FALSE);
-    }
-
 out:
     yaml_document_delete(&dy);
     yaml_parser_delete(&parser);
+    free(current_yaml_file_path);
+
+    return rc;
+}
+#endif
+
+#if 1
+/* See description in 'conf_yaml.h' */
+te_errno
+NEW_parse_config_yaml(const char *filename, te_kvpair_h *expand_vars,
+                      history_seq *history_root, const char *conf_dirs)
+{
+//    yaml_parser_t           parser;
+//    yaml_document_t         dy;
+//    yaml_node_t            *root = NULL;
+    te_errno                rc = 0;
+    char                   *current_yaml_file_path;
+
+    NEW_parse_config_yaml_ctx ctx;
+
+    current_yaml_file_path = strdup(filename);
+    if (current_yaml_file_path == NULL)
+    {
+        rc = TE_ENOMEM;
+        goto out;
+    }
+
+    memset(&ctx, 0, sizeof(ctx));
+    ctx.file_path = current_yaml_file_path;
+    ctx.history = history_root;
+    ctx.expand_vars = expand_vars;
+    ctx.conf_dirs = conf_dirs;
+    rc = NEW_parse_config_yaml_file_to_seq(&ctx);
+    if (rc != 0)
+    {
+        ERROR(CS_YAML_ERR_PREFIX
+              "encountered some error(s) on file '%s' processing",
+              filename);
+        goto out;
+    }
+
+    rc = NEW_reparse_config_root_seq(&ctx, history_root);
+    if (rc != 0)
+    {
+        ERROR(CS_YAML_ERR_PREFIX
+              "encountered some error(s) on file '%s' reparse processing",
+              filename);
+        goto out;
+    }
+
+    rcf_log_cfg_changes(TRUE);
+#if 0
+    rc = NEW_parse_config_dh_sync(history, expand_vars);
+#endif /* IT SHOULD BE RETURNED */
+    rcf_log_cfg_changes(FALSE);
+
+out:
     free(current_yaml_file_path);
 
     return rc;
